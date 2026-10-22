@@ -1,0 +1,4 @@
+graphify-out/
+.pio/
+.venv/
+build/
