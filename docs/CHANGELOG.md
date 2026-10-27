@@ -4,6 +4,31 @@ All notable changes to the **Arduino Quadcopter Flight Controller (`drone`)** pr
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to **Spec-Driven Development (SDD)**.
 
+## [0.4.0] - 2026-10-27
+
+### Added
+- **Anti-AI Slop Graphite UI Design System (`UITheme` in `odometry/sim_3d.py`):**
+  - Synthesized design principles from the Maestro World Info Vault (`Impeccable` Anti-AI Slop rules), Agency UI/UX Personas (`design-ui-designer`, `design-ux-architect`), and `context7` (`Pygame` / `PyOpenGL`) to replace saturated neon borders and ASCII pseudo-icons with a professional 2-Bar Graphite Instrument Layout (`TOP_BAR_HEIGHT = 52px`, compact bottom dock `DOCK_PILL_HEIGHT = 24px`, `DOCK_PILL_WIDTH = 74px`, and `460px` 5-column telemetry drawer with `PANEL_ROW_LATEST` highlight).
+  - Implemented High-DPI native typography hierarchy (`DejaVu Sans,Ubuntu` regular `14px`–`17px` for UI controls/labels and `DejaVu Sans Mono,Ubuntu Mono` `22px` bold tabular readouts for `ROLL`, `PITCH`, `YAW`).
+  - Added hardware **4x MSAA** (`GL_MULTISAMPLEBUFFERS=1`, `GL_MULTISAMPLESAMPLES=4` with safe fallback), `GL_LINE_SMOOTH`, and vector 2D anti-aliased status indicators (`pygame.gfxdraw.aacircle` + `filled_circle`).
+  - Added `format_sample_time()` to convert 13-digit Unix epoch timestamps and simulation milliseconds into relative session seconds (`12.4s`) in the right-hand telemetry drawer.
+  - Added TDD unit tests (`test_ui_theme_tokens`) in `odometry/tests/test_drone_model.py`.
+- **RViz IMU Coordinate Triad, Layer Visibility & Direct Serial Ingestion (`odometry/`, `sim3d`):**
+  - Added `IMUAxesSpec` and `ComponentVisibility` in `odometry/drone_model.py` to render an RViz-style 3-axis coordinate triad (`+X` Red, `+Y` Green, `+Z` Blue) at the IMU origin and toggle individual layers (`1`–`5`).
+  - Added `SerialPlotPoller` and `parse_serial_plot_line()` in `odometry/telemetry_reader.py` for direct USB serial telemetry ingestion alongside the `./sim3d` CLI launcher (`--serialplot` / `--mock`).
+- **6-Value Firmware Telemetry Stream (`code/src/main.cpp`, `code/include/drone_config.h`):**
+  - Added `ACCEL_SENSITIVITY_LSB_G = 4096.0f` and expanded the 25 Hz serial stream to emit `Roll Pitch Yaw AccX AccY AccZ` (in degrees and $g$).
+
+### Changed
+- **Single Generic I2C Bus Scanner (`code/src/i2c_finder.cpp`):**
+  - Generalized `i2c_finder.cpp` into a 100% device-agnostic I2C scanner (`0x01`..`0x7E` at 100 kHz with `A4`/`A5` electrical pull-up verification) and unified `platformio.ini` to `[env:uno]` and `[env:i2c_finder]`.
+- **Canonical IMU Math Deduplication (`odometry/tester.c` & `odometry/Makefile`):**
+  - Updated `odometry/tester.c` to include `code/include/imu_attitude.h` directly via `-I../code/include`, eliminating duplicate C filter implementations and unused `test_hook_*` stubs.
+
+### Removed
+- **Repository Cleanup (Graphify Dead-Node Audit):**
+  - Removed redundant `code/src/alt_pin_scanner.cpp`, isolated 2D matplotlib script `odometry/plot_serial.py`, `compile_commands.json`, and empty PlatformIO boilerplate directories (`code/include/README`, `lib/`, `test/`).
+
 ## [0.3.0] - 2026-10-22
 
 ### Added
