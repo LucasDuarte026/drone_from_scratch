@@ -21,7 +21,7 @@ from typing import Optional
 import pygame
 import pygame.gfxdraw
 from pygame.locals import (
-    QUIT, KEYDOWN, K_ESCAPE, K_h, K_p, K_c, K_r,
+    QUIT, KEYDOWN, K_ESCAPE, K_h, K_p, K_c, K_r, K_s,
     MOUSEBUTTONDOWN, MOUSEBUTTONUP, MOUSEMOTION, VIDEORESIZE
 )
 
@@ -428,6 +428,11 @@ class Sim3DApp:
                 (rect.x + (rect.width - lbl_surf.get_width()) // 2, rect.y + (rect.height - lbl_surf.get_height()) // 2)
             )
 
+    def toggle_serial_connection(self):
+        """Connect or disconnect serial port from UI to free /dev/ttyUSBx for PlatformIO upload."""
+        if self.serial_worker:
+            self.serial_worker.toggle_user_connected()
+
     def recalibrate_imu(self):
         """Send 'C' recalibration signal to Arduino over Serial and zero attitude state."""
         if self.serial_worker:
@@ -449,31 +454,38 @@ class Sim3DApp:
         is_calibrating = time.monotonic() < self._calibrating_until
 
         # =====================================================================
-        # 1. TOP-LEFT: Status Pill
+        # 1. TOP-LEFT: Clickable Status & Serial Release Pill (Shortcut: S)
         # =====================================================================
         is_online = self.buffer.is_online()
+        user_disconnected = (self.mode == "serial" and self.serial_worker and not self.serial_worker.user_connected)
         if is_calibrating:
             status_color = (245, 180, 40)
-            status_text = "Calibrando IMU..."
+            status_text = "Calibrating IMU..."
+        elif user_disconnected:
+            status_color = (245, 175, 40)
+            port_name = os.path.basename(self.serial_worker.port or "ttyUSB0")
+            status_text = f"Port Free  ·  {port_name} [S]"
         else:
             status_color = UITheme.STATUS_ONLINE if is_online else UITheme.STATUS_OFFLINE
             if is_online:
                 if self.mode == "serial" and self.serial_worker:
                     port_name = os.path.basename(self.serial_worker.active_port) if self.serial_worker.active_port else "Serial"
-                    status_text = f"Online  ·  {port_name} ({self.baudrate})"
+                    status_text = f"Online  ·  {port_name} ({self.baudrate}) [S]"
                 else:
-                    status_text = "Online  ·  Simulação"
+                    status_text = "Online  ·  Simulation"
             else:
                 if self.mode == "serial" and self.serial_worker and self.serial_worker.active_port:
                     port_name = os.path.basename(self.serial_worker.active_port)
-                    status_text = f"Offline  ·  {port_name}"
+                    status_text = f"Trying  ·  {port_name} [S]"
                 else:
-                    status_text = "Offline  ·  Sem sinal"
+                    status_text = "Offline  ·  No Signal"
 
         status_surf = self.font_ui_bold.render(status_text, True, UITheme.TEXT_PRIMARY if is_online else UITheme.TEXT_SECONDARY)
         status_w = status_surf.get_width() + 56
         status_rect = pygame.Rect(20, top_y, status_w, bar_h)
-        pygame.draw.rect(self.hud_surface, UITheme.PANEL_BG, status_rect, border_radius=10)
+        self.btn_status_rect = status_rect
+        status_bg = UITheme.BTN_HOVER if status_rect.collidepoint(mouse_pos) else UITheme.PANEL_BG
+        pygame.draw.rect(self.hud_surface, status_bg, status_rect, border_radius=10)
         pygame.draw.rect(self.hud_surface, UITheme.BORDER, status_rect, width=1, border_radius=10)
 
         self._draw_aa_dot(status_rect.x + 22, top_y + bar_h // 2, 7, status_color)
@@ -526,12 +538,12 @@ class Sim3DApp:
         self.btn_cal_rect = pygame.Rect(self.btn_proj_rect.left - btn_gap - cal_btn_w, top_y, cal_btn_w, bar_h)
         self.btn_home_rect = pygame.Rect(self.btn_cal_rect.left - btn_gap - home_btn_w, top_y, home_btn_w, bar_h)
 
-        proj_label = "Isométrica" if self.camera.is_isometric else "Perspectiva"
-        cal_label = "Calibrando" if is_calibrating else "Calibrar"
+        proj_label = "Isometric" if self.camera.is_isometric else "Perspective"
+        cal_label = "Calibrating" if is_calibrating else "Calibrate"
         self._draw_pill_button(self.btn_home_rect, "Reset", mouse_pos, is_active=False, shortcut="H")
         self._draw_pill_button(self.btn_cal_rect, cal_label, mouse_pos, is_active=is_calibrating, shortcut="R")
         self._draw_pill_button(self.btn_proj_rect, proj_label, mouse_pos, is_active=self.camera.is_isometric, shortcut="P")
-        self._draw_pill_button(self.btn_chat_rect, "Telemetria", mouse_pos, is_active=self.chat_expanded, shortcut="C")
+        self._draw_pill_button(self.btn_chat_rect, "Telemetry", mouse_pos, is_active=self.chat_expanded, shortcut="C")
 
         # Collapsible Telemetry Drawer
         if self.chat_expanded:
@@ -553,11 +565,11 @@ class Sim3DApp:
             # Table Columns Definition: (Header, X-Anchor, Align)
             # Align 'left' anchors at x; Align 'right' aligns the right edge of header & values at x.
             columns = [
-                ("AMOSTRA", drawer_x + 18, "left"),
-                ("TEMPO",   drawer_x + 168, "right"),
-                ("ROLL",    drawer_x + 258, "right"),
-                ("PITCH",   drawer_x + 350, "right"),
-                ("YAW",     drawer_x + drawer_w - 18, "right"),
+                ("SAMPLE", drawer_x + 18, "left"),
+                ("TIME",   drawer_x + 168, "right"),
+                ("ROLL",   drawer_x + 258, "right"),
+                ("PITCH",  drawer_x + 350, "right"),
+                ("YAW",    drawer_x + drawer_w - 18, "right"),
             ]
 
             for col_title, col_x, align in columns:
@@ -596,18 +608,18 @@ class Sim3DApp:
 
                     y_row += row_h
             else:
-                empty_s = self.font_ui.render("Aguardando dados de telemetria...", True, UITheme.TEXT_MUTED)
+                empty_s = self.font_ui.render("Waiting for telemetry data...", True, UITheme.TEXT_MUTED)
                 self.hud_surface.blit(empty_s, (drawer_x + 18, drawer_y + 46))
 
         # =====================================================================
         # 4. BOTTOM-CENTER: Floating Layer Visibility Dock
         # =====================================================================
         layer_items = [
-            ("body", "Corpo", "1", self.visibility.show_body),
-            ("arms", "Braços", "2", self.visibility.show_arms),
-            ("motors", "Motores", "3", self.visibility.show_motors),
-            ("imu_axes", "Eixos", "4", self.visibility.show_imu_axes),
-            ("grid", "Grade", "5", self.visibility.show_grid),
+            ("body", "Body", "1", self.visibility.show_body),
+            ("arms", "Arms", "2", self.visibility.show_arms),
+            ("motors", "Motors", "3", self.visibility.show_motors),
+            ("imu_axes", "Axes", "4", self.visibility.show_imu_axes),
+            ("grid", "Grid", "5", self.visibility.show_grid),
         ]
 
         pill_w = UITheme.DOCK_PILL_WIDTH
@@ -633,7 +645,7 @@ class Sim3DApp:
             bx += pill_w + pill_gap
 
         # Subtle bottom hint
-        hints = "Arrastar Esq: Órbita   ·   Arrastar Dir: Pan   ·   Scroll: Zoom"
+        hints = "Left Drag: Orbit   ·   Right Drag: Pan   ·   Scroll: Zoom"
         hint_surf = self.font_label.render(hints, True, UITheme.TEXT_MUTED)
         self.hud_surface.blit(hint_surf, ((self.width - hint_surf.get_width()) // 2, self.height - 26))
 
@@ -709,6 +721,8 @@ class Sim3DApp:
                         running = False
                     elif event.key == K_h:
                         self.camera.reset_home()
+                    elif event.key == K_s:
+                        self.toggle_serial_connection()
                     elif event.key == K_r:
                         self.recalibrate_imu()
                     elif event.key == K_p:
@@ -737,6 +751,8 @@ class Sim3DApp:
 
                         if layer_clicked:
                             pass
+                        elif hasattr(self, "btn_status_rect") and self.btn_status_rect.collidepoint(mouse_pos):
+                            self.toggle_serial_connection()
                         elif hasattr(self, "btn_home_rect") and self.btn_home_rect.collidepoint(mouse_pos):
                             self.camera.reset_home()
                         elif hasattr(self, "btn_cal_rect") and self.btn_cal_rect.collidepoint(mouse_pos):

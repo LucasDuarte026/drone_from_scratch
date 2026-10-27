@@ -93,6 +93,30 @@ def test_ui_theme_tokens():
     assert len(format_sample_time(1793129963582, 1793129960000)) <= 8
 
 
+def test_english_only_ui_labels():
+    from pathlib import Path
+
+    sim_src = (Path(__file__).resolve().parent.parent / "sim_3d.py").read_text(encoding="utf-8")
+    reader_src = (Path(__file__).resolve().parent.parent / "telemetry_reader.py").read_text(encoding="utf-8")
+
+    # Mandatory English UI strings
+    for eng_label in (
+        '"SAMPLE"', '"TIME"', '"Isometric"', '"Perspective"', '"Calibrate"',
+        '"Telemetry"', '"Body"', '"Arms"', '"Motors"', '"Axes"', '"Grid"',
+        '"Waiting for telemetry data..."', '"Left Drag: Orbit   ·   Right Drag: Pan   ·   Scroll: Zoom"'
+    ):
+        assert eng_label in sim_src
+
+    # Prohibited Portuguese UI strings
+    for pt_label in (
+        "AMOSTRA", "TEMPO", "Isométrica", "Perspectiva", "Calibrar",
+        "Telemetria", "Corpo", "Braços", "Motores", "Eixos", "Grade",
+        "Porta Livre", "Sem sinal", "Aguardando dados", "DESCONECTADO"
+    ):
+        assert pt_label not in sim_src
+        assert pt_label not in reader_src
+
+
 
 
 def test_inertial_position_estimator_stationary_and_tilted_gravity():

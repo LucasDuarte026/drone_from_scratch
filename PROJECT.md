@@ -49,7 +49,9 @@ This project is governed by strict **Spec-Driven Development (SDD)** with OpenSp
 3. **Automated Python Test Stack:**
    - Every hardware driver, kinematic algorithm, telemetry pipeline, and mathematical transformation is mapped to automated, deterministic tests in Python (`pytest` inside an isolated `.venv`).
 4. **Odometry & Real-Time 3D Simulation Subsystem (`odometry/`):**
-   - Real-time 3D telemetry visualization (Pygame + PyOpenGL) consuming a 10-position FIFO buffer from `odometry/telemetry.log`, fed by an IMU C driver tester (`odometry/tester.c`) for continuous live inspection and dimensioning validation.
+   - Real-time 3D telemetry visualization (Pygame + PyOpenGL) consuming a 10-position FIFO buffer from `odometry/logs/telemetry.log` or direct USB serial (`SerialTelemetryWorker`), fed by an IMU C driver tester (`odometry/tester.c`) for continuous live inspection and dimensioning validation.
+5. **Mandatory English-Only Standard (UI, Code & Docs):**
+   - All project documentation, OpenSpec specifications, firmware logs, and simulator GUI elements (`odometry/sim_3d.py`) are standardized in **English by default** and verified by automated unit tests (`test_english_only_ui_labels`).
 
 ---
 

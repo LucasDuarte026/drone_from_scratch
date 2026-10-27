@@ -31,4 +31,5 @@ This project operates strictly under **Bottom-Up Spec-Driven Development (SDD)**
 3. **Automated Python Test Rig (`.venv`):** High-control unit and integration tests run inside the Python virtual environment for all telemetry decoding, ring buffers, kinematic transforms, and driver mocking.
 4. **Interactive Telemetry & Odometry (`odometry/`):** Real-time 3D simulation and C driver tester (`odometry/tester.c` + `odometry/sim_3d.py`) to provide visual inspection and dimensioning verification during development.
 5. **Stage Isolation:** Stage 1 (IMU Attitude Determination) is the active focus. Stage 2 (RC Receiver PWM & EEPROM) and Stages 3–4 (Motor Testing & PID Control) are documented at the architectural level and kept open for subsequent development rounds.
+6. **English-Only UI & Documentation Standard:** All system documentation, OpenSpec specifications, source code comments, serial telemetry messages, and graphical user interfaces (including the 3D simulator HUD in `odometry/sim_3d.py`) MUST use **English as the mandatory default language** (`test_english_only_ui_labels`).
 

@@ -12,7 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Implemented High-DPI native typography hierarchy (`DejaVu Sans,Ubuntu` regular `14px`–`17px` for UI controls/labels and `DejaVu Sans Mono,Ubuntu Mono` `22px` bold tabular readouts for `ROLL`, `PITCH`, `YAW`).
   - Added hardware **4x MSAA** (`GL_MULTISAMPLEBUFFERS=1`, `GL_MULTISAMPLESAMPLES=4` with safe fallback), `GL_LINE_SMOOTH`, and vector 2D anti-aliased status indicators (`pygame.gfxdraw.aacircle` + `filled_circle`).
   - Added `format_sample_time()` to convert 13-digit Unix epoch timestamps and simulation milliseconds into relative session seconds (`12.4s`) in the right-hand telemetry drawer.
-  - Added TDD unit tests (`test_ui_theme_tokens`) in `odometry/tests/test_drone_model.py`.
+  - Standardized all simulator HUD labels, table columns (`SAMPLE`, `TIME`, `ROLL`, `PITCH`, `YAW`), layer dock pills (`Body`, `Arms`, `Motors`, `Axes`, `Grid`), and serial worker statuses in **English by default**, enforced by `test_english_only_ui_labels` in `odometry/tests/test_drone_model.py`.
+  - Added TDD unit tests (`test_ui_theme_tokens`, `test_english_only_ui_labels`) in `odometry/tests/test_drone_model.py`.
 - **RViz IMU Coordinate Triad, Layer Visibility & Direct Serial Ingestion (`odometry/`, `sim3d`):**
   - Added `IMUAxesSpec` and `ComponentVisibility` in `odometry/drone_model.py` to render an RViz-style 3-axis coordinate triad (`+X` Red, `+Y` Green, `+Z` Blue) at the IMU origin and toggle individual layers (`1`–`5`).
   - Added `SerialPlotPoller` and `parse_serial_plot_line()` in `odometry/telemetry_reader.py` for direct USB serial telemetry ingestion alongside the `./sim3d` CLI launcher (`--serialplot` / `--mock`).

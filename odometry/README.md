@@ -89,7 +89,7 @@ The 3D simulator interface was redesigned using knowledge synthesized from three
 2. **Agency UI Designer & UX Architect Personas (`UITheme` Token System)**:
    - **Neutral Graphite Surfaces**: Deep canvas `(0.07, 0.08, 0.10)`, translucent slate panels `(22, 25, 32, 232)`, latest-row highlight `(38, 46, 60, 225)`, subtle borders `(56, 62, 76, 215)`, and internal hairline dividers `(48, 54, 68, 200)`.
    - **Interactive States**: Distinct `BTN_IDLE`, `BTN_HOVER` (mouse hover tracking), and `BTN_ACTIVE` `(56, 68, 90, 248)` with `BORDER_ACTIVE` `(98, 120, 158, 240)`.
-   - **High-DPI Typography & Tabular Hierarchy**: Native Linux geometric sans (`DejaVu Sans,Ubuntu`, `14px`–`17px` regular) for muted uppercase labels and controls, paired with tabular monospace (`DejaVu Sans Mono,Ubuntu Mono`, `22px` bold for primary `ROLL`/`PITCH`/`YAW` readouts and `16px` for the 5-column `460px` telemetry drawer: `AMOSTRA`, `TEMPO`, `ROLL`, `PITCH`, `YAW`) so numeric updates at 25 Hz never jitter horizontally.
+   - **High-DPI Typography & Tabular Hierarchy (English-Only UI Standard)**: All UI labels, status strings, and table columns are standardized in English. Native Linux geometric sans (`DejaVu Sans,Ubuntu`, `14px`–`17px` regular) is used for muted uppercase labels and controls, paired with tabular monospace (`DejaVu Sans Mono,Ubuntu Mono`, `22px` bold for primary `ROLL`/`PITCH`/`YAW` readouts and `16px` for the 5-column `460px` telemetry drawer: `SAMPLE`, `TIME`, `ROLL`, `PITCH`, `YAW`) so numeric updates at 25 Hz never jitter horizontally.
    - **Relative Session Time (`format_sample_time`)**: Converts raw 13-digit Unix epoch timestamps or simulation ms into clean relative session seconds (`12.4s`).
 3. **Context7 (`Pygame` & `PyOpenGL` Hardware Anti-Aliasing)**:
    - **OpenGL 4x MSAA & Line Smoothing**: Configures `GL_MULTISAMPLEBUFFERS = 1` and `GL_MULTISAMPLESAMPLES = 4` prior to window creation (with graceful fallback), alongside `glEnable(GL_MULTISAMPLE)`, `glEnable(GL_LINE_SMOOTH)`, and `glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)`.
@@ -97,20 +97,21 @@ The 3D simulator interface was redesigned using knowledge synthesized from three
 
 ---
 
-## 🎮 Simulator Controls & HUD Features
+## 🎮 Simulator Controls & HUD Features (English Default)
 
 | Feature | Control / Interaction | Description |
 | :--- | :--- | :--- |
 | **Orbit Camera** | Left-Click + Drag | Rotates the viewpoint freely around the quadcopter (Azimuth & Elevation). |
 | **Pan Camera** | Right-Click + Drag | Shifts the scene focal center. |
 | **Zoom In / Out** | Mouse Wheel | Moves camera closer to or farther from the drone. |
-| **Reset View** | Click **`Reset View`** or press `H` | Instantly restores camera to default isometric view ($45^\circ / 30^\circ$). |
-| **Projection Toggle**| Click **`Perspective` / `Orthographic`** or press `P` | Switches between Orthographic Isometric and Perspective projections. |
-| **Telemetry Drawer**| Click **`Telemetry`** or press `C` | Collapses or expands the right-hand tabular drawer (`TIME`, `ROLL`, `PITCH`, `YAW`) showing the 10-position FIFO buffer. |
-| **Status Pill**| Top-Left Pill | **Anti-Aliased Green Dot (`ONLINE · SERIAL/MOCK`)**: active stream within $< 1.0\text{ s}$.<br>**Red Dot (`OFFLINE`)**: signal timeout / stream stalled. |
+| **Serial Port Release**| Click Top-Left Status Pill or press `S` | Toggles serial connection (`Online · ttyUSBx` $\leftrightarrow$ `Port Free · ttyUSBx [S]`) to free the USB port for PlatformIO firmware uploads. |
+| **Reset View** | Click **`H Reset`** or press `H` | Instantly restores camera to default isometric view ($45^\circ / 30^\circ$). |
+| **Calibrate IMU** | Click **`R Calibrate`** or press `R` | Sends `'C\n'` recalibration command over serial to the Arduino and zeroes the 3D attitude pose. |
+| **Projection Toggle**| Click **`P Perspective` / `P Isometric`** or press `P` | Switches between Orthographic Isometric and Perspective projections. |
+| **Telemetry Drawer**| Click **`C Telemetry`** or press `C` | Collapses or expands the right-hand 5-column tabular drawer (`SAMPLE`, `TIME`, `ROLL`, `PITCH`, `YAW`) showing the 10-position FIFO buffer. |
 | **Attitude Readout**| Top-Center 3-Column Bar | High-DPI `22px` tabular monospace readout for live **ROLL**, **PITCH**, and **YAW**. |
 | **RViz IMU Axes**| Center Origin Triad | **3D Orthogonal Axes at IMU Center**: Red = +X (Nose), Green = +Y (Right), Blue = +Z (Down/Vertical). |
-| **Bottom Layer Dock**| Click Dock Pills or Keys `1`–`5`| **Individual Layer Toggles**: `[1] Body` · `[2] Arms` · `[3] Motors` · `[4] IMU Axes` · `[5] Grid`. |
+| **Bottom Layer Dock**| Click Dock Pills or Keys `1`–`5`| **Individual Layer Toggles**: `1 Body` · `2 Arms` · `3 Motors` · `4 Axes` · `5 Grid`. |
 | **Drone Manipulability**| None | **Non-manipulable**: Drone attitude (Roll, Pitch, Yaw) is 100% driven by telemetry. |
 
 

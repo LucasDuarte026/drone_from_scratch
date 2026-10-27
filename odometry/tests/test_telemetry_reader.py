@@ -131,7 +131,8 @@ def test_serial_worker_connect_disconnect_control():
     worker.set_user_connected(False)
     assert worker.user_connected is False
     assert worker.is_connected() is False
-    assert "DESCONECTADO" in worker.status_description.upper()
+    assert "DISCONNECTED" in worker.status_description.upper()
+    assert "FREE" in worker.status_description.upper()
 
     worker.set_user_connected(True)
     assert worker.user_connected is True

@@ -284,10 +284,10 @@ flowchart LR
 3. **`odometry/sim_3d.py` (Anti-AI Slop Graphite `UITheme` & 4x MSAA OpenGL):**
    - Renders a 3D drone model comprising a central cuboid fuselage, 4 cylindrical diagonal arms, 4 vertical cylindrical motors, and an RViz-style 3-axis IMU triad at the origin.
    - Enables hardware **4x MSAA** (`GL_MULTISAMPLEBUFFERS=1`, `GL_MULTISAMPLESAMPLES=4` with safe fallback), `GL_LINE_SMOOTH`, and `pygame.gfxdraw` anti-aliased 2D status dots.
-   - Organizes the interface into a High-DPI **2-Bar Graphite Instrument Layout** governed by `UITheme`:
-     - **Top Instrument Bar (`52px`)**: Left status pill (`ONLINE`/`OFFLINE` + `SERIAL`/`MOCK`), center 3-column Attitude Readout (`ROLL`, `PITCH`, `YAW` in `22px` bold tabular monospace), and right action pills (`Reset`, `Perspectiva`/`Isométrica`, `Telemetria`).
-     - **Bottom Centered Layer Dock (`24px` x `74px` compact pills)**: Interactive toggles (`[1] Corpo`, `[2] Braços`, `[3] Motores`, `[4] Eixos`, `[5] Grade`) with hover and active states.
-     - **Right-Hand Telemetry Drawer (`460px` width)**: Structured 5-column table (`AMOSTRA`, `TEMPO`, `ROLL`, `PITCH`, `YAW`) with latest-row highlight (`PANEL_ROW_LATEST`) and relative session time formatting (`format_sample_time()`).
+   - Organizes the interface into a High-DPI **2-Bar Graphite Instrument Layout (English-Only Default UI Standard)** governed by `UITheme`:
+     - **Top Instrument Bar (`52px`)**: Left clickable status & serial-release pill (`Online · ttyUSBx [S]`, `Port Free · ttyUSBx [S]`, `Online · Simulation`, `Offline · No Signal`), center 3-column Attitude Readout (`ROLL`, `PITCH`, `YAW` in `22px` bold tabular monospace), and right action pills (`H Reset`, `R Calibrate`, `P Perspective`/`Isometric`, `C Telemetry`).
+     - **Bottom Centered Layer Dock (`24px` x `74px` compact pills)**: Interactive toggles (`1 Body`, `2 Arms`, `3 Motors`, `4 Axes`, `5 Grid`) with hover and active states.
+     - **Right-Hand Telemetry Drawer (`460px` width)**: Structured 5-column table (`SAMPLE`, `TIME`, `ROLL`, `PITCH`, `YAW`) with latest-row highlight (`PANEL_ROW_LATEST`) and relative session time formatting (`format_sample_time()`).
 
 ### 8.2 Strict SDD & Dual-Role TDD Governance
 - **Matrix Specification:** All subsystem capabilities and behavioral scenarios are first authored in OpenSpec (`openspec/changes/odometry-3d-simulation/`).

@@ -285,7 +285,7 @@ class SerialTelemetryWorker:
         if not self.user_connected:
             self._connected = False
             self._active_port = None
-            self._error_msg = "Porta liberada pelo usuário"
+            self._error_msg = "Port released by user"
         else:
             self._reconnect_requested = True
 
@@ -334,11 +334,11 @@ class SerialTelemetryWorker:
     @property
     def status_description(self) -> str:
         if not self.user_connected:
-            return f"DESCONECTADO ({os.path.basename(self.port or 'USB')} LIVRE)"
+            return f"DISCONNECTED ({os.path.basename(self.port or 'USB')} FREE)"
         if self._connected:
             return f"{self.active_port} @ {self.baudrate}"
         trying = self._trying_port or self.port or "ttyUSB0/USB1"
-        return f"Tentando {trying}..."
+        return f"Trying {trying}..."
 
     def _next_candidate_port(self) -> str:
         if not self.auto_scan:
@@ -376,13 +376,13 @@ class SerialTelemetryWorker:
             if not target_port or not os.path.exists(target_port):
                 self._connected = False
                 self._active_port = None
-                self._error_msg = f"Tentando {target_port or 'ttyUSB0'}..."
+                self._error_msg = f"Trying {target_port or 'ttyUSB0'}..."
                 time.sleep(0.6)
                 continue
 
             try:
                 self._active_port = target_port
-                with serial.Serial(target_port, self.baudrate, timeout=0.25) as ser:
+                with serial.Serial(target_port, self.baudrate, timeout=0.25, exclusive=True) as ser:
                     self._connected = True
                     self._error_msg = None
                     self.port = target_port
