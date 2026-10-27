@@ -26,6 +26,7 @@
 #define IMU_ACCEL_FS_8G             0x10     // AFS_SEL = 2 (+/- 8g)
 #define IMU_DLPF_43HZ               0x03     // DLPF_CFG = 3 (~43 Hz bandwidth)
 #define GYRO_SENSITIVITY_LSB_DPS    65.5     // 65.5 LSB/(deg/s)
+#define ACCEL_SENSITIVITY_LSB_G     4096.0f  // 4096 LSB/g for +/- 8g
 
 // Axis Mounting Polarity (+1 or -1)
 #define IMU_SIGN_X                  (+1)

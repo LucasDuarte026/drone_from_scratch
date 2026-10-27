@@ -32,6 +32,8 @@ double gyro_yaw_input = 0.0;
 
 float angle_roll_acc = 0.0f;
 float angle_pitch_acc = 0.0f;
+float angle_roll_offset = 0.0f;
+float angle_pitch_offset = 0.0f;
 
 float angle_roll = 0.0f;
 float angle_pitch = 0.0f;
@@ -142,6 +144,64 @@ void gyro_signalen() {
 }
 
 // ============================================================================
+// Gyroscope + Accelerometer Level Calibration Routine (Boot & On-Demand 'C')
+// ============================================================================
+void calibrate_imu(uint16_t samples) {
+  digitalWrite(PIN_LED_STATUS, LOW);
+  gyro_axis_cal[0] = 0.0;
+  gyro_axis_cal[1] = 0.0;
+  gyro_axis_cal[2] = 0.0;
+
+  double acc_sum_x = 0.0;
+  double acc_sum_y = 0.0;
+  double acc_sum_z = 0.0;
+
+  for (uint16_t i = 0; i < samples; i++) {
+    if (i % 64 == 0) {
+      digitalWrite(PIN_LED_WARNING, !digitalRead(PIN_LED_WARNING));
+    }
+    gyro_signalen();
+    gyro_axis_cal[0] += (gyro_axis[0] * IMU_SIGN_X);
+    gyro_axis_cal[1] += (gyro_axis[1] * IMU_SIGN_Y);
+    gyro_axis_cal[2] += (gyro_axis[2] * IMU_SIGN_Z);
+
+    acc_sum_x += (double)acc_x;
+    acc_sum_y += (double)acc_y;
+    acc_sum_z += (double)acc_z;
+    delay(3);
+  }
+
+  gyro_axis_cal[0] /= (double)samples;
+  gyro_axis_cal[1] /= (double)samples;
+  gyro_axis_cal[2] /= (double)samples;
+
+  // Compute level reference offsets from average stationary gravity vector
+  double avg_ax = acc_sum_x / (double)samples;
+  double avg_ay = acc_sum_y / (double)samples;
+  double avg_az = acc_sum_z / (double)samples;
+  imu_calc_acc_angles(avg_ax, avg_ay, avg_az, &angle_roll_offset, &angle_pitch_offset);
+
+  // Reset filter & integration states to zero
+  gyro_roll_input = 0.0;
+  gyro_pitch_input = 0.0;
+  gyro_yaw_input = 0.0;
+  angle_roll = 0.0f;
+  angle_pitch = 0.0f;
+  angle_yaw = 0.0f;
+  first_angle = true;
+  telemetry_counter = 0;
+
+  // Flush any remaining serial command bytes
+  while (Serial.available() > 0) {
+    Serial.read();
+  }
+
+  digitalWrite(PIN_LED_WARNING, LOW);
+  digitalWrite(PIN_LED_STATUS, HIGH);
+  loop_timer = micros();
+}
+
+// ============================================================================
 // Setup Routine
 // ============================================================================
 void setup() {
@@ -168,36 +228,12 @@ void setup() {
     Serial.read();
   }
 
-  // 2000-sample stationary gyroscope bias calibration
-  Serial.print(F("Calibrating gyroscope offsets (keep drone motionless)"));
-  for (cal_int = 0; cal_int < 2000; cal_int++) {
-    if (cal_int % 125 == 0) {
-      digitalWrite(PIN_LED_WARNING, !digitalRead(PIN_LED_WARNING));
-      Serial.print(F("."));
-    }
-    gyro_signalen();
-    gyro_axis_cal[0] += (gyro_axis[0] * IMU_SIGN_X);
-    gyro_axis_cal[1] += (gyro_axis[1] * IMU_SIGN_Y);
-    gyro_axis_cal[2] += (gyro_axis[2] * IMU_SIGN_Z);
-    delay(3);
-  }
+  Serial.print(F("Calibrating IMU offsets (keep drone motionless)..."));
+  calibrate_imu(1000);
   Serial.println(F(" [DONE]"));
 
-  gyro_axis_cal[0] /= 2000.0;
-  gyro_axis_cal[1] /= 2000.0;
-  gyro_axis_cal[2] /= 2000.0;
-
-  Serial.print(F("Offsets [Roll, Pitch, Yaw]: "));
-  Serial.print(gyro_axis_cal[0]);
-  Serial.print(F(", "));
-  Serial.print(gyro_axis_cal[1]);
-  Serial.print(F(", "));
-  Serial.println(gyro_axis_cal[2]);
-
-  digitalWrite(PIN_LED_WARNING, LOW);
-  digitalWrite(PIN_LED_STATUS, HIGH);
-
-  Serial.println(F("Streaming attitude format: Roll Pitch Yaw"));
+  Serial.println(F("Streaming attitude & accel format: Roll Pitch Yaw AccX AccY AccZ"));
+  Serial.println(F("Send 'C' over Serial at any time to recalibrate IMU."));
   Serial.println(F("--------------------------------------------------"));
 
   loop_timer = micros();
@@ -207,6 +243,15 @@ void setup() {
 // Main Control Loop (Strict 250 Hz / 4000 us Budget)
 // ============================================================================
 void loop() {
+  // 0. Check for on-demand Recalibration Command ('C' or 'R') from Python UI
+  if (Serial.available() > 0) {
+    char cmd = (char)Serial.read();
+    if (cmd == 'C' || cmd == 'c' || cmd == 'R' || cmd == 'r') {
+      calibrate_imu(400);
+      return;
+    }
+  }
+
   // 1. Read raw burst from IMU
   gyro_signalen();
 
@@ -231,9 +276,11 @@ void loop() {
   float angle_pitch_gyro = angle_pitch + (float)(d_pitch * (double)DT_SECONDS);
   angle_yaw += (float)(d_yaw * (double)DT_SECONDS);
 
-  // 6. Accelerometer tilt angles estimation (Eq. 8-10)
+  // 6. Accelerometer tilt angles estimation (Eq. 8-10) with level calibration offset
   imu_calc_acc_angles((double)acc_x, (double)acc_y, (double)acc_z,
                       &angle_roll_acc, &angle_pitch_acc);
+  angle_roll_acc  -= angle_roll_offset;
+  angle_pitch_acc -= angle_pitch_offset;
 
   // 7. Complementary filter sensor fusion (Eq. 11-12)
   if (!first_angle) {
@@ -246,14 +293,27 @@ void loop() {
     angle_pitch = imu_fuse_angle(angle_pitch_gyro, angle_pitch_acc);
   }
 
-  // 8. Decimated 25 Hz Serial Telemetry Stream (compatible with Serial Plotter and Odometry 3D)
-  if (++telemetry_counter >= TELEMETRY_DECIMATION) {
-    telemetry_counter = 0;
+  // 8. Split 25 Hz Serial Telemetry across 2 ticks so 250 Hz (4000 us) budget never overruns!
+  telemetry_counter++;
+  if (telemetry_counter == (TELEMETRY_DECIMATION / 2)) {
+    // Part 1 (Tick 5): Attitude angles
     Serial.print(angle_roll, 2);
     Serial.print(' ');
     Serial.print(angle_pitch, 2);
     Serial.print(' ');
-    Serial.println(angle_yaw, 2);
+    Serial.print(angle_yaw, 2);
+    Serial.print(' ');
+  } else if (telemetry_counter >= TELEMETRY_DECIMATION) {
+    // Part 2 (Tick 10): Normalized accelerometer (g) + newline
+    telemetry_counter = 0;
+    float ax_g = (float)acc_x / ACCEL_SENSITIVITY_LSB_G;
+    float ay_g = (float)acc_y / ACCEL_SENSITIVITY_LSB_G;
+    float az_g = (float)acc_z / ACCEL_SENSITIVITY_LSB_G;
+    Serial.print(ax_g, 2);
+    Serial.print(' ');
+    Serial.print(ay_g, 2);
+    Serial.print(' ');
+    Serial.println(az_g, 2);
   }
 
   // 9. Loop Overrun Watchdog
