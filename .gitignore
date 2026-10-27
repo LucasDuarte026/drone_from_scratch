@@ -38,3 +38,4 @@ openspec/
 
 # Local Agent Skills & Workspace Customizations
 .agents/
+.vscode/

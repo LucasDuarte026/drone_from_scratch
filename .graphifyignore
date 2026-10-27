@@ -2,3 +2,7 @@ graphify-out/
 .pio/
 .venv/
 build/
+.vscode/
+compile_commands.json
+odometry/tester
+odometry/logs/
