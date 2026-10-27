@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O2 -Wall -Wextra -std=c99
+CFLAGS = -O2 -Wall -Wextra -std=c99 -I../code/include
 LDFLAGS = -lm
 
 TARGET = tester
@@ -14,4 +14,3 @@ clean:
 	rm -f $(TARGET) telemetry.log logs/*.log
 
 .PHONY: all clean
-

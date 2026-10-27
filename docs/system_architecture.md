@@ -1,7 +1,7 @@
 # System Architecture (`system_architecture.md`)
 
 > **Reference Documentation — Spec-Driven Development (SDD)**  
-> **Version:** 0.1.0 · **Status:** Active · **Updated:** October 2026  
+> **Version:** 0.4.0 · **Status:** Active · **Updated:** October 2026  
 
 ---
 
@@ -227,12 +227,14 @@ Per Section 1 and Appendix B of `tutorial_programacao_drone_especializacao.pdf`,
 1. **Clean Code Encapsulation & Multi-Environment PlatformIO (`platformio.ini`):**
    - Managed entirely via PlatformIO CLI (`pio run`, `pio test`).
    - Embedded firmware sources and headers are cleanly isolated within the dedicated `code/` directory:
-     - `code/src/`: Firmware entry points (`main.cpp`, stage implementations).
+     - `code/src/main.cpp`: Primary Stage 1 flight controller firmware.
+     - `code/src/i2c_finder.cpp`: Generic 100 kHz I2C bus scanner (`0x01`..`0x7E`) & `A4`/`A5` pull-up electrical diagnostic tool.
      - `code/include/`: Shared headers (`drone_config.h`, `imu_attitude.h`).
-   - `platformio.ini` explicitly directs compilation via `src_dir = code/src` and `include_dir = code/include` (with root symlinks maintained for seamless toolchain interoperability).
-   - Dedicated environments per stage (`[env:stage1_imu]`, `[env:stage2_rx]`, `[env:stage3_motors]`, `[env:stage4_flight]`) plus `[env:native]` for host-side unit testing, ensuring every stage's calibration/verification firmware remains permanently buildable while sharing `code/include/` and `code/src/` modules.
-2. **Strict Appendix B Compatibility + Testable Math Headers:**
-   - All global variables from Appendix B (`acc_x`, `gyro_roll_input`, `angle_roll`, `angle_pitch`, etc.) and exact equations (Eq. 1–12) are preserved 100%, with pure mathematical functions decoupled into `code/include/` headers for deterministic host testing.
+   - `platformio.ini` explicitly directs compilation via `src_dir = code/src` and `include_dir = code/include` across two streamlined environments:
+     - `[env:uno]`: Compiles `code/src/main.cpp`.
+     - `[env:i2c_finder]`: Compiles `code/src/i2c_finder.cpp`.
+2. **Strict Appendix B Compatibility + Single-Source Testable Math Headers:**
+   - All global variables from Appendix B (`acc_x`, `gyro_roll_input`, `angle_roll`, `angle_pitch`, etc.) and exact equations (Eq. 1–12) are preserved 100%, with pure mathematical functions decoupled into `code/include/imu_attitude.h` and shared directly with `odometry/tester.c` (`-I../code/include`).
 3. **Configurable IMU Axis Polarity (`code/include/drone_config.h`):**
    - `IMU_SIGN_X`, `IMU_SIGN_Y`, and `IMU_SIGN_Z` (default `+1`) allow instant axis inversion if the physical MPU-6050/6000 mounting on the frame differs from the body coordinate frame.
 4. **Decimated 25 Hz Telemetry & $4050\,\mu\text{s}$ Overrun Watchdog:**
@@ -252,18 +254,17 @@ flowchart LR
         MockSim["C Synthetic Dynamics"]
     end
 
-    subgraph TesterC ["odometry/tester.c"]
+    subgraph TesterC ["odometry/tester.c + code/include/imu_attitude.h"]
         HAL["UART Receiver / Mock Generator"]
-        MathPipe["IMU Math Driver (IIR, Euler, Accel, Comp)"]
-        TestHooks["User Test Hooks (Dimensioning & Stress)"]
-        StreamLog["Streamer (odometry/telemetry.log)"]
-        HAL --> MathPipe --> TestHooks --> StreamLog
+        MathPipe["Shared IMU Math Header (imu_attitude.h: IIR, Euler, Accel, Comp)"]
+        StreamLog["Streamer (odometry/logs/telemetry.log)"]
+        HAL --> MathPipe --> StreamLog
     end
 
     subgraph PythonStack ["Python Telemetry & 3D Visualization"]
-        Reader["TelemetryBuffer (10-position FIFO)"]
-        Sim3D["Pygame + PyOpenGL 3D Drone View"]
-        UIOverlays["Camera Orbit, Home, Projection, Status, Chat Overlay"]
+        Reader["TelemetryBuffer (10-position FIFO + Relative Timer)"]
+        Sim3D["Pygame + PyOpenGL 4x MSAA 3D Drone View"]
+        UIOverlays["UITheme Graphite 2-Bar HUD + gfxdraw Indicators"]
         Reader --> Sim3D
         Reader --> UIOverlays
     end
@@ -273,26 +274,20 @@ flowchart LR
 ```
 
 1. **`odometry/tester.c`:**
-   - Implements UART serial reader (`/dev/ttyACM*` or `/dev/ttyUSB*` at `57600` bps) with non-blocking I/O.
-   - Provides an autonomous synthetic mock mode reproducing realistic 3D quadcopter kinematics when hardware is unplugged.
-   - Incorporates modular `// TODO: [Test Hook]` slots for live step-response, sensitivity, and filter tuning.
-   - Flushes telemetry continuously into `odometry/telemetry.log` (`timestamp_ms,roll,pitch,yaw,acc_x,acc_y,acc_z`).
+   - Directly includes `code/include/imu_attitude.h` (`-I../code/include`) so host verification and embedded firmware share a single source of truth for attitude math.
+   - Implements UART serial reader (`/dev/ttyACM*` or `/dev/ttyUSB*` at `57600` bps) with non-blocking I/O, plus an autonomous synthetic mock mode (`-m` / `--mock`) reproducing realistic 3D quadcopter kinematics when hardware is unplugged.
+   - Flushes telemetry continuously into `odometry/logs/telemetry.log` (`timestamp_ms,roll,pitch,yaw,acc_x,acc_y,acc_z`).
 2. **`odometry/telemetry_reader.py`:**
-   - Polls the tail of `telemetry.log` with file inode tracking and offset management.
+   - Polls the tail of `odometry/logs/telemetry.log` with file inode tracking and offset management, or reads directly from hardware USB serial via `SerialPlotPoller`.
    - Maintains a strict 10-position FIFO circular buffer (`collections.deque(maxlen=10)`).
    - Computes real-time connection state (`Online` if data received within `< 1.0s`, otherwise `Offline`).
-3. **`odometry/sim_3d.py`:**
-   - Renders a 3D drone model comprising:
-     - Central cuboid fuselage.
-     - 4 cylindrical diagonal arms.
-     - 4 vertical cylindrical motors at the arm extremities.
-   - Provides free orbital camera rotation via mouse drag, mouse wheel zoom, and pan.
-   - Zero drone manipulation: orientation is 100% driven by telemetry.
-   - UI Controls:
-     - **Home Button:** Restores isometric default camera view.
-     - **Projection Toggle:** Switches between Isometric (Orthographic) and Perspective.
-     - **Collapsible Chat Overlay:** Displays the live stream of consumed telemetry lines from the 10-position buffer.
-     - **Status Indicator:** Green LED icon for Online, Red for Offline.
+3. **`odometry/sim_3d.py` (Anti-AI Slop Graphite `UITheme` & 4x MSAA OpenGL):**
+   - Renders a 3D drone model comprising a central cuboid fuselage, 4 cylindrical diagonal arms, 4 vertical cylindrical motors, and an RViz-style 3-axis IMU triad at the origin.
+   - Enables hardware **4x MSAA** (`GL_MULTISAMPLEBUFFERS=1`, `GL_MULTISAMPLESAMPLES=4` with safe fallback), `GL_LINE_SMOOTH`, and `pygame.gfxdraw` anti-aliased 2D status dots.
+   - Organizes the interface into a High-DPI **2-Bar Graphite Instrument Layout** governed by `UITheme`:
+     - **Top Instrument Bar (`52px`)**: Left status pill (`ONLINE`/`OFFLINE` + `SERIAL`/`MOCK`), center 3-column Attitude Readout (`ROLL`, `PITCH`, `YAW` in `22px` bold tabular monospace), and right action pills (`Reset`, `Perspectiva`/`Isométrica`, `Telemetria`).
+     - **Bottom Centered Layer Dock (`24px` x `74px` compact pills)**: Interactive toggles (`[1] Corpo`, `[2] Braços`, `[3] Motores`, `[4] Eixos`, `[5] Grade`) with hover and active states.
+     - **Right-Hand Telemetry Drawer (`460px` width)**: Structured 5-column table (`AMOSTRA`, `TEMPO`, `ROLL`, `PITCH`, `YAW`) with latest-row highlight (`PANEL_ROW_LATEST`) and relative session time formatting (`format_sample_time()`).
 
 ### 8.2 Strict SDD & Dual-Role TDD Governance
 - **Matrix Specification:** All subsystem capabilities and behavioral scenarios are first authored in OpenSpec (`openspec/changes/odometry-3d-simulation/`).

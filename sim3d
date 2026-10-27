@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# sym3d - Real-Time 3D Drone Odometry & Telemetry Simulator CLI
+# ==============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
+exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/odometry/sim_3d.py" "$@"

@@ -2,16 +2,6 @@
 """
 Real-Time 3D Drone Odometry & Attitude Simulator
 Built with Pygame + PyOpenGL.
-
-Features:
-- Fictional drone model: central cuboid + 4 cylindrical arms + 4 vertical cylindrical motors.
-- 10-position FIFO tail buffer reading 'odometry/telemetry.log'.
-- Orbital camera (left drag: orbit, right drag: pan, wheel: zoom).
-- Non-manipulable drone (attitude 100% driven by telemetry file).
-- 'Home' button: returns camera to default isometric view.
-- 'Projection' toggle: Isometric (Orthographic) vs Perspective.
-- Top-left Online (green) / Offline (red) status indicator (< 1.0s timeout).
-- Collapsible floating HUD chat displaying the 10-position telemetry stream.
 """
 
 import sys
@@ -27,35 +17,70 @@ if _CURRENT_DIR not in sys.path:
 
 import math
 import time
+from typing import Optional
 import pygame
+import pygame.gfxdraw
 from pygame.locals import (
-    QUIT, KEYDOWN, K_ESCAPE, K_h, K_p, K_c,
+    QUIT, KEYDOWN, K_ESCAPE, K_h, K_p, K_c, K_r,
     MOUSEBUTTONDOWN, MOUSEBUTTONUP, MOUSEMOTION, VIDEORESIZE
 )
 
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
-
 try:
-    from odometry.telemetry_reader import TelemetryBuffer
+    from odometry.telemetry_reader import (
+        TelemetryBuffer, SerialTelemetryWorker, find_serial_port
+    )
     from odometry.drone_model import (
         DroneDimensions, DroneGeometry, draw_cuboid, draw_cylinder,
         euler_to_matrix, VisibilityOptions, draw_imu_axes
     )
 except ImportError:
-    from telemetry_reader import TelemetryBuffer
+    from telemetry_reader import (
+        TelemetryBuffer, SerialTelemetryWorker, find_serial_port
+    )
     from drone_model import (
         DroneDimensions, DroneGeometry, draw_cuboid, draw_cylinder,
         euler_to_matrix, VisibilityOptions, draw_imu_axes
     )
 
 
-
 DEFAULT_LOG_FILE = "odometry/logs/telemetry.log"
 FALLBACK_LOG_FILE = "odometry/telemetry.log"
-WINDOW_WIDTH = 1200
-WINDOW_HEIGHT = 800
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 820
+
+
+class UITheme:
+    """Neutral graphite design tokens (anti-slop technical instrument aesthetic)."""
+    BG_CLEAR = (0.07, 0.08, 0.10, 1.0)          # #121419 deep graphite 3D viewport
+    PANEL_BG = (22, 25, 32, 232)                # Translucent dark slate surface
+    PANEL_ROW_LATEST = (38, 46, 60, 225)        # Subtle highlight row for latest sample
+    BTN_IDLE = (28, 32, 40, 220)                # Default button fill
+    BTN_HOVER = (44, 50, 64, 240)               # Hover button fill
+    BTN_ACTIVE = (56, 68, 90, 248)              # Active toggle fill
+    BORDER = (56, 62, 76, 215)                  # 1px subtle neutral border
+    BORDER_ACTIVE = (98, 120, 158, 240)         # 1px steel active border
+    DIVIDER = (48, 54, 68, 200)                 # Internal hairline separator
+    TEXT_PRIMARY = (244, 246, 250)              # Crisp off-white for values & active items
+    TEXT_SECONDARY = (205, 212, 224)            # Secondary text
+    TEXT_MUTED = (145, 154, 170)                # Muted labels & key hints
+    STATUS_ONLINE = (16, 185, 129)              # Emerald green (#10B981)
+    STATUS_OFFLINE = (239, 68, 68)              # Coral red (#EF4444)
+
+    # Layout Sizing Tokens (High-DPI friendly)
+    TOP_BAR_HEIGHT = 52
+    DOCK_PILL_HEIGHT = 24
+    DOCK_PILL_WIDTH = 74
+
+
+def format_sample_time(timestamp_ms: int, base_ms: int = 0) -> str:
+    """Format timestamp into a compact, readable seconds string (e.g. '12.4s')."""
+    if timestamp_ms > 1_000_000_000:
+        rel_ms = max(0, timestamp_ms - base_ms) if base_ms > 0 else (timestamp_ms % 100000)
+        return f"{rel_ms / 1000.0:6.1f}s"
+    return f"{timestamp_ms / 1000.0:6.1f}s"
 
 
 class CameraState:
@@ -73,15 +98,59 @@ class CameraState:
         self.pan_x = 0.0
         self.pan_y = 0.0
 
+
 class Sim3DApp:
-    def __init__(self, log_path: str = DEFAULT_LOG_FILE):
-
-        if log_path == DEFAULT_LOG_FILE and not os.path.exists(log_path) and os.path.exists(FALLBACK_LOG_FILE):
-            self.log_path = FALLBACK_LOG_FILE
-        else:
+    def __init__(
+        self,
+        mode_or_log: str = "serial",
+        port: str = None,
+        baudrate: int = 57600,
+        log_path: str = DEFAULT_LOG_FILE,
+        mode: str = None
+    ):
+        if mode is not None:
+            self.mode = mode
             self.log_path = log_path
-        self.buffer = TelemetryBuffer(capacity=10, offline_timeout=1.0)
+        elif mode_or_log in ("serial", "mock"):
+            self.mode = mode_or_log
+            self.log_path = log_path
+        elif mode_or_log.endswith(".log") or os.path.sep in mode_or_log:
+            self.mode = "mock"
+            self.log_path = mode_or_log
+        else:
+            self.mode = "serial"
+            self.log_path = log_path
 
+        if self.log_path == DEFAULT_LOG_FILE and not os.path.exists(self.log_path) and os.path.exists(FALLBACK_LOG_FILE):
+            self.log_path = FALLBACK_LOG_FILE
+
+        self.port = port
+        self.baudrate = baudrate
+        self.buffer = TelemetryBuffer(capacity=10, offline_timeout=1.0)
+        self.serial_worker: Optional[SerialTelemetryWorker] = None
+        self.mock_process = None
+        self._session_base_ms: int = 0
+
+        if self.mode == "serial":
+            self.serial_worker = SerialTelemetryWorker(
+                buffer=self.buffer,
+                port=self.port,
+                baudrate=self.baudrate,
+                log_file=self.log_path
+            )
+            self.serial_worker.start()
+        elif self.mode == "mock":
+            tester_bin = os.path.join(_PROJECT_ROOT, "odometry", "tester")
+            if os.path.exists(tester_bin) and os.access(tester_bin, os.X_OK):
+                import subprocess
+                try:
+                    self.mock_process = subprocess.Popen(
+                        [tester_bin, "-m", "-o", self.log_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                except Exception as e:
+                    print(f"[WARN] Could not auto-start mock tester: {e}")
 
         self.dims = DroneDimensions()
         self.geom = DroneGeometry(self.dims)
@@ -94,7 +163,6 @@ class Sim3DApp:
         self.mouse_right_down = False
         self.last_mouse_pos = (0, 0)
 
-
         # Attitude interpolation (filtered for 60 FPS smoothness)
         self.current_roll = 0.0
         self.current_pitch = 0.0
@@ -105,30 +173,59 @@ class Sim3DApp:
 
         # UI State
         self.chat_expanded = True
+        self._calibrating_until: float = 0.0
         self.width = WINDOW_WIDTH
         self.height = WINDOW_HEIGHT
 
-        # Initialize Pygame & OpenGL
+        # Initialize Pygame & OpenGL with 4x MSAA anti-aliasing
         pygame.init()
         pygame.font.init()
-        pygame.display.set_caption("Drone 3D Real-Time Odometry & Telemetry Simulator")
-        self.screen = pygame.display.set_mode((self.width, self.height), pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE)
+        pygame.display.set_caption("Drone 3D Telemetry")
+        self._create_gl_window(self.width, self.height)
 
-        # 2D HUD Surface
+        # 2D HUD Surface & High-Readability Typography Hierarchy
         self.hud_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
-        self.font_main = pygame.font.SysFont("monospace", 14, bold=True)
-        self.font_title = pygame.font.SysFont("sans-serif", 15, bold=True)
-        self.font_btn = pygame.font.SysFont("sans-serif", 13, bold=True)
+        sans_fonts = "DejaVu Sans,Ubuntu,Liberation Sans,Arial,sans-serif"
+        mono_fonts = "DejaVu Sans Mono,Ubuntu Mono,Liberation Mono,Consolas,monospace"
+
+        self.font_label = pygame.font.SysFont(sans_fonts, 14, bold=True)
+        self.font_ui = pygame.font.SysFont(sans_fonts, 17, bold=False)
+        self.font_ui_bold = pygame.font.SysFont(sans_fonts, 17, bold=True)
+        self.font_dock = pygame.font.SysFont(sans_fonts, 11, bold=False)
+        self.font_dock_bold = pygame.font.SysFont(sans_fonts, 11, bold=True)
+        self.font_dock_key = pygame.font.SysFont(sans_fonts, 10, bold=True)
+        self.font_value = pygame.font.SysFont(mono_fonts, 22, bold=True)
+        self.font_mono = pygame.font.SysFont(mono_fonts, 16, bold=False)
+        self.font_mono_bold = pygame.font.SysFont(mono_fonts, 16, bold=True)
 
         self.init_gl()
 
+    def _create_gl_window(self, width: int, height: int):
+        flags = pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE
+        try:
+            pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
+            pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
+            self.screen = pygame.display.set_mode((width, height), flags)
+        except pygame.error:
+            pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 0)
+            pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 0)
+            self.screen = pygame.display.set_mode((width, height), flags)
+
     def init_gl(self):
-        glClearColor(0.08, 0.10, 0.14, 1.0) # Deep slate aerospace background
+        glClearColor(*UITheme.BG_CLEAR)
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         glShadeModel(GL_SMOOTH)
         glEnable(GL_NORMALIZE)
+
+        # Smooth anti-aliased lines and multisampling
+        glEnable(GL_LINE_SMOOTH)
+        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
+        try:
+            glEnable(GL_MULTISAMPLE)
+        except Exception:
+            pass
 
         # Lighting setup
         glEnable(GL_LIGHTING)
@@ -137,9 +234,9 @@ class Sim3DApp:
         glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
 
         glLightfv(GL_LIGHT0, GL_POSITION, (5.0, 5.0, 10.0, 1.0))
-        glLightfv(GL_LIGHT0, GL_AMBIENT, (0.35, 0.35, 0.40, 1.0))
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, (0.85, 0.85, 0.90, 1.0))
-        glLightfv(GL_LIGHT0, GL_SPECULAR, (1.0, 1.0, 1.0, 1.0))
+        glLightfv(GL_LIGHT0, GL_AMBIENT, (0.38, 0.39, 0.42, 1.0))
+        glLightfv(GL_LIGHT0, GL_DIFFUSE, (0.88, 0.89, 0.92, 1.0))
+        glLightfv(GL_LIGHT0, GL_SPECULAR, (0.9, 0.9, 0.95, 1.0))
 
         # Hardware-accelerated 2D HUD Texture
         self.hud_texture = glGenTextures(1)
@@ -150,7 +247,6 @@ class Sim3DApp:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
         glBindTexture(GL_TEXTURE_2D, 0)
 
-
     def setup_projection(self):
         glViewport(0, 0, self.width, self.height)
         glMatrixMode(GL_PROJECTION)
@@ -158,11 +254,9 @@ class Sim3DApp:
         aspect = float(self.width) / float(self.height if self.height > 0 else 1)
 
         if self.camera.is_isometric:
-            # Orthographic Isometric Projection
             ortho_size = self.camera.distance * 0.45
             glOrtho(-ortho_size * aspect, ortho_size * aspect, -ortho_size, ortho_size, 0.1, 100.0)
         else:
-            # Perspective Projection
             gluPerspective(45.0, aspect, 0.1, 100.0)
 
         glMatrixMode(GL_MODELVIEW)
@@ -183,11 +277,11 @@ class Sim3DApp:
         )
 
     def draw_ground_grid(self):
-        """Draws subtle ground reference plane with X (+Red) and Y (+Green) axes."""
+        """Draws subtle ground reference plane with X (+Red), Y (+Green), Z (+Blue) origin axes."""
         glDisable(GL_LIGHTING)
         glLineWidth(1.0)
         glBegin(GL_LINES)
-        glColor4f(0.18, 0.22, 0.28, 0.6)
+        glColor4f(0.18, 0.20, 0.24, 0.55)
 
         grid_size = 5.0
         step = 0.5
@@ -201,20 +295,19 @@ class Sim3DApp:
         glEnd()
 
         # Origin Axis pointers
-        glLineWidth(2.5)
+        glLineWidth(2.0)
         glBegin(GL_LINES)
-        # X: Nose / Forward (Red)
-        glColor4f(0.9, 0.2, 0.2, 0.9)
+        glColor4f(0.85, 0.25, 0.25, 0.85)
         glVertex3f(0.0, 0.0, -0.98)
-        glVertex3f(1.5, 0.0, -0.98)
-        # Y: Right Wing (Green)
-        glColor4f(0.2, 0.8, 0.3, 0.9)
+        glVertex3f(1.2, 0.0, -0.98)
+
+        glColor4f(0.20, 0.78, 0.38, 0.85)
         glVertex3f(0.0, 0.0, -0.98)
-        glVertex3f(0.0, 1.5, -0.98)
-        # Z: Downward / Upward (Blue)
-        glColor4f(0.2, 0.4, 0.9, 0.9)
+        glVertex3f(0.0, 1.2, -0.98)
+
+        glColor4f(0.25, 0.50, 0.90, 0.85)
         glVertex3f(0.0, 0.0, -0.98)
-        glVertex3f(0.0, 0.0, -0.2)
+        glVertex3f(0.0, 0.0, -0.3)
         glEnd()
 
         glEnable(GL_LIGHTING)
@@ -228,19 +321,19 @@ class Sim3DApp:
 
         # 1. Central Cuboid (Fuselage)
         if self.visibility.show_body:
-            glColor4f(0.25, 0.28, 0.35, 1.0) # Sleek graphite body
+            glColor4f(0.24, 0.27, 0.33, 1.0)
             draw_cuboid(self.dims.body_size, self.dims.body_size, self.dims.body_height)
 
-            # Nose indicator on top of body (Arrow pointing forward along +X)
+            # Nose direction chevron on top of body (+X)
             glDisable(GL_LIGHTING)
-            glLineWidth(3.0)
-            glColor4f(0.0, 0.95, 0.85, 1.0) # Cyan arrow for front
+            glLineWidth(2.5)
+            glColor4f(0.92, 0.94, 0.98, 0.9)
             glBegin(GL_LINES)
             z_top = (self.dims.body_height / 2.0) + 0.01
-            glVertex3f(0.0, -0.15, z_top)
-            glVertex3f(self.dims.body_size * 0.45, 0.0, z_top)
-            glVertex3f(0.0,  0.15, z_top)
-            glVertex3f(self.dims.body_size * 0.45, 0.0, z_top)
+            glVertex3f(0.0, -0.14, z_top)
+            glVertex3f(self.dims.body_size * 0.42, 0.0, z_top)
+            glVertex3f(0.0,  0.14, z_top)
+            glVertex3f(self.dims.body_size * 0.42, 0.0, z_top)
             glEnd()
             glEnable(GL_LIGHTING)
 
@@ -258,158 +351,295 @@ class Sim3DApp:
             angle_xy = math.degrees(math.atan2(ey, ex))
             is_front = arm["is_front"]
 
-            # Draw Arm Cylinder
             if self.visibility.show_arms:
                 glPushMatrix()
                 glRotatef(angle_xy, 0.0, 0.0, 1.0)
-                glRotatef(90.0, 0.0, 1.0, 0.0) # Align cylinder along +X
+                glRotatef(90.0, 0.0, 1.0, 0.0)
                 if is_front:
-                    glColor4f(0.20, 0.65, 0.70, 1.0) # Front arms cyan-tinted
+                    glColor4f(0.32, 0.46, 0.62, 1.0)  # Steel blue front arms
                 else:
-                    glColor4f(0.40, 0.42, 0.46, 1.0) # Rear arms carbon-gray
+                    glColor4f(0.36, 0.38, 0.43, 1.0)  # Matte carbon rear arms
                 draw_cylinder(self.dims.arm_radius, arm_len)
                 glPopMatrix()
 
-            # Draw Vertical Motor Cylinder at Arm Extremity
             if self.visibility.show_motors:
                 glPushMatrix()
                 glTranslatef(ex, ey, -self.dims.motor_height / 2.0)
                 if is_front:
-                    glColor4f(0.0, 0.85, 0.45, 1.0) # Front motors vivid green
+                    glColor4f(0.12, 0.72, 0.50, 1.0)  # Emerald front motors
                 else:
-                    glColor4f(0.85, 0.35, 0.20, 1.0) # Rear motors warm amber
+                    glColor4f(0.82, 0.38, 0.24, 1.0)  # Terracotta rear motors
                 draw_cylinder(self.dims.motor_radius, self.dims.motor_height)
                 glPopMatrix()
 
         glPopMatrix()
 
+    def _draw_aa_dot(self, x: int, y: int, radius: int, color: tuple):
+        """Draw a smooth anti-aliased circle using pygame.gfxdraw."""
+        pygame.gfxdraw.aacircle(self.hud_surface, x, y, radius, color)
+        pygame.gfxdraw.filled_circle(self.hud_surface, x, y, radius, color)
+
+    def _draw_pill_button(
+        self,
+        rect: pygame.Rect,
+        label: str,
+        mouse_pos: tuple,
+        is_active: bool = False,
+        shortcut: str = None,
+        compact: bool = False
+    ):
+        """Render a clean, modern pill button with hover and active states."""
+        is_hovered = rect.collidepoint(mouse_pos)
+        if is_active:
+            bg = UITheme.BTN_ACTIVE
+            border = UITheme.BORDER_ACTIVE
+            fg = UITheme.TEXT_PRIMARY
+            font = self.font_dock_bold if compact else self.font_ui_bold
+        elif is_hovered:
+            bg = UITheme.BTN_HOVER
+            border = UITheme.BORDER
+            fg = UITheme.TEXT_PRIMARY
+            font = self.font_dock if compact else self.font_ui
+        else:
+            bg = UITheme.BTN_IDLE
+            border = UITheme.BORDER
+            fg = UITheme.TEXT_SECONDARY
+            font = self.font_dock if compact else self.font_ui
+
+        radius = 5 if compact else 8
+        pygame.draw.rect(self.hud_surface, bg, rect, border_radius=radius)
+        pygame.draw.rect(self.hud_surface, border, rect, width=1, border_radius=radius)
+
+        lbl_surf = font.render(label, True, fg)
+        if shortcut:
+            key_font = self.font_dock_key if compact else self.font_label
+            gap = 4 if compact else 8
+            key_surf = key_font.render(shortcut, True, UITheme.TEXT_MUTED)
+            total_w = key_surf.get_width() + gap + lbl_surf.get_width()
+            start_x = rect.x + (rect.width - total_w) // 2
+            self.hud_surface.blit(key_surf, (start_x, rect.y + (rect.height - key_surf.get_height()) // 2))
+            self.hud_surface.blit(
+                lbl_surf,
+                (start_x + key_surf.get_width() + gap, rect.y + (rect.height - lbl_surf.get_height()) // 2)
+            )
+        else:
+            self.hud_surface.blit(
+                lbl_surf,
+                (rect.x + (rect.width - lbl_surf.get_width()) // 2, rect.y + (rect.height - lbl_surf.get_height()) // 2)
+            )
+
+    def recalibrate_imu(self):
+        """Send 'C' recalibration signal to Arduino over Serial and zero attitude state."""
+        if self.serial_worker:
+            self.serial_worker.request_calibration()
+        self.target_roll = 0.0
+        self.target_pitch = 0.0
+        self.target_yaw = 0.0
+        self.current_roll = 0.0
+        self.current_pitch = 0.0
+        self.current_yaw = 0.0
+        self._calibrating_until = time.monotonic() + 1.6
 
     def render_hud_overlay(self):
-        """Draws 2D overlay: Status indicator, Home & Projection buttons, and Collapsible Chat."""
+        """Draws a minimal, unified 2-bar HUD: Top Instrument Bar + Centered Bottom Dock."""
         self.hud_surface.fill((0, 0, 0, 0))
+        mouse_pos = pygame.mouse.get_pos()
+        top_y = 18
+        bar_h = UITheme.TOP_BAR_HEIGHT
+        is_calibrating = time.monotonic() < self._calibrating_until
 
-        # -------------------------------------------------------------
-        # 1. Top-Left: Online/Offline Status Indicator
-        # -------------------------------------------------------------
+        # =====================================================================
+        # 1. TOP-LEFT: Status Pill
+        # =====================================================================
         is_online = self.buffer.is_online()
-        status_color = (40, 220, 90) if is_online else (240, 50, 60)
-        status_text = "STATUS: ONLINE (STREAMING)" if is_online else "STATUS: OFFLINE (NO SIGNAL)"
+        if is_calibrating:
+            status_color = (245, 180, 40)
+            status_text = "Calibrando IMU..."
+        else:
+            status_color = UITheme.STATUS_ONLINE if is_online else UITheme.STATUS_OFFLINE
+            if is_online:
+                if self.mode == "serial" and self.serial_worker:
+                    port_name = os.path.basename(self.serial_worker.active_port) if self.serial_worker.active_port else "Serial"
+                    status_text = f"Online  ·  {port_name} ({self.baudrate})"
+                else:
+                    status_text = "Online  ·  Simulação"
+            else:
+                if self.mode == "serial" and self.serial_worker and self.serial_worker.active_port:
+                    port_name = os.path.basename(self.serial_worker.active_port)
+                    status_text = f"Offline  ·  {port_name}"
+                else:
+                    status_text = "Offline  ·  Sem sinal"
 
-        # Background badge
-        badge_rect = pygame.Rect(15, 15, 270, 38)
-        pygame.draw.rect(self.hud_surface, (20, 25, 35, 210), badge_rect, border_radius=8)
-        pygame.draw.rect(self.hud_surface, (50, 60, 80, 220), badge_rect, width=1, border_radius=8)
+        status_surf = self.font_ui_bold.render(status_text, True, UITheme.TEXT_PRIMARY if is_online else UITheme.TEXT_SECONDARY)
+        status_w = status_surf.get_width() + 56
+        status_rect = pygame.Rect(20, top_y, status_w, bar_h)
+        pygame.draw.rect(self.hud_surface, UITheme.PANEL_BG, status_rect, border_radius=10)
+        pygame.draw.rect(self.hud_surface, UITheme.BORDER, status_rect, width=1, border_radius=10)
 
-        # Status Circle
-        pygame.draw.circle(self.hud_surface, status_color, (33, 34), 8)
-        pygame.draw.circle(self.hud_surface, (255, 255, 255, 120), (33, 34), 10, width=1)
+        self._draw_aa_dot(status_rect.x + 22, top_y + bar_h // 2, 7, status_color)
+        self.hud_surface.blit(status_surf, (status_rect.x + 38, top_y + (bar_h - status_surf.get_height()) // 2))
 
-        # Status Label
-        lbl_surf = self.font_title.render(status_text, True, (240, 245, 250))
-        self.hud_surface.blit(lbl_surf, (50, 25))
-
-        # Current Attitude Badge below status
+        # =====================================================================
+        # 2. TOP-CENTER: Unified Attitude Readout Pill (Roll | Pitch | Yaw)
+        # =====================================================================
         latest = self.buffer.get_latest()
-        att_rect = pygame.Rect(15, 60, 270, 48)
-        pygame.draw.rect(self.hud_surface, (15, 20, 28, 190), att_rect, border_radius=6)
         r_deg = latest.roll if latest else self.current_roll
         p_deg = latest.pitch if latest else self.current_pitch
         y_deg = latest.yaw if latest else self.current_yaw
-        att_str1 = f"ROLL: {r_deg:+6.1f}°  PITCH: {p_deg:+6.1f}°"
-        att_str2 = f"YAW : {y_deg:+6.1f}°  BUFFER: 10 POS"
-        self.hud_surface.blit(self.font_main.render(att_str1, True, (0, 230, 210)), (24, 66))
-        self.hud_surface.blit(self.font_main.render(att_str2, True, (180, 200, 220)), (24, 86))
 
-        # -------------------------------------------------------------
-        # 2. Top-Center Controls: HOME & PROJECTION Buttons
-        # -------------------------------------------------------------
-        # Home Button
-        self.btn_home_rect = pygame.Rect(300, 15, 100, 36)
-        pygame.draw.rect(self.hud_surface, (30, 38, 52, 220), self.btn_home_rect, border_radius=6)
-        pygame.draw.rect(self.hud_surface, (70, 90, 120, 240), self.btn_home_rect, width=1, border_radius=6)
-        self.hud_surface.blit(self.font_btn.render("⌂ HOME", True, (240, 245, 250)), (322, 24))
+        col_w = 180
+        att_w = col_w * 3
+        att_x = max(status_rect.right + 16, (self.width - att_w) // 2)
+        att_rect = pygame.Rect(att_x, top_y, att_w, bar_h)
+        pygame.draw.rect(self.hud_surface, UITheme.PANEL_BG, att_rect, border_radius=10)
+        pygame.draw.rect(self.hud_surface, UITheme.BORDER, att_rect, width=1, border_radius=10)
 
-        # Projection Button
-        proj_label = "PROJ: ISOMETRIC" if self.camera.is_isometric else "PROJ: PERSPECTIVE"
-        self.btn_proj_rect = pygame.Rect(410, 15, 170, 36)
-        pygame.draw.rect(self.hud_surface, (30, 38, 52, 220), self.btn_proj_rect, border_radius=6)
-        pygame.draw.rect(self.hud_surface, (70, 90, 120, 240), self.btn_proj_rect, width=1, border_radius=6)
-        self.hud_surface.blit(self.font_btn.render(proj_label, True, (240, 245, 250)), (425, 24))
+        axes_readout = [
+            ("ROLL", f"{r_deg:+6.1f}°"),
+            ("PITCH", f"{p_deg:+6.1f}°"),
+            ("YAW", f"{y_deg:+6.1f}°"),
+        ]
+        for i, (axis_lbl, val_str) in enumerate(axes_readout):
+            cx = att_x + i * col_w
+            if i > 0:
+                pygame.draw.line(
+                    self.hud_surface, UITheme.DIVIDER,
+                    (cx, top_y + 10), (cx, top_y + bar_h - 10), 1
+                )
+            lbl_s = self.font_label.render(axis_lbl, True, UITheme.TEXT_MUTED)
+            val_s = self.font_value.render(val_str, True, UITheme.TEXT_PRIMARY)
+            self.hud_surface.blit(lbl_s, (cx + 16, top_y + (bar_h - lbl_s.get_height()) // 2))
+            self.hud_surface.blit(val_s, (cx + col_w - val_s.get_width() - 16, top_y + (bar_h - val_s.get_height()) // 2))
 
-        # -------------------------------------------------------------
-        # 3. Top-Right: Collapsible Real-Time Stream Chat
-        # -------------------------------------------------------------
-        chat_width = 460
-        chat_x = self.width - chat_width - 15
+        # =====================================================================
+        # 3. TOP-RIGHT: Camera, Recalibration & Telemetry Drawer Controls
+        # =====================================================================
+        btn_gap = 8
+        chat_btn_w = 138
+        proj_btn_w = 144
+        cal_btn_w = 118
+        home_btn_w = 98
 
-        # Chat Toggle Button
-        toggle_label = "▼ TELEMETRY STREAM CHAT" if self.chat_expanded else "▲ SHOW TELEMETRY CHAT"
-        self.btn_chat_rect = pygame.Rect(chat_x, 15, chat_width, 36)
-        pygame.draw.rect(self.hud_surface, (25, 32, 45, 230), self.btn_chat_rect, border_radius=6)
-        pygame.draw.rect(self.hud_surface, (0, 200, 220, 180), self.btn_chat_rect, width=1, border_radius=6)
-        self.hud_surface.blit(self.font_btn.render(toggle_label, True, (0, 240, 255)), (chat_x + 15, 24))
+        right_edge = self.width - 20
+        self.btn_chat_rect = pygame.Rect(right_edge - chat_btn_w, top_y, chat_btn_w, bar_h)
+        self.btn_proj_rect = pygame.Rect(self.btn_chat_rect.left - btn_gap - proj_btn_w, top_y, proj_btn_w, bar_h)
+        self.btn_cal_rect = pygame.Rect(self.btn_proj_rect.left - btn_gap - cal_btn_w, top_y, cal_btn_w, bar_h)
+        self.btn_home_rect = pygame.Rect(self.btn_cal_rect.left - btn_gap - home_btn_w, top_y, home_btn_w, bar_h)
 
+        proj_label = "Isométrica" if self.camera.is_isometric else "Perspectiva"
+        cal_label = "Calibrando" if is_calibrating else "Calibrar"
+        self._draw_pill_button(self.btn_home_rect, "Reset", mouse_pos, is_active=False, shortcut="H")
+        self._draw_pill_button(self.btn_cal_rect, cal_label, mouse_pos, is_active=is_calibrating, shortcut="R")
+        self._draw_pill_button(self.btn_proj_rect, proj_label, mouse_pos, is_active=self.camera.is_isometric, shortcut="P")
+        self._draw_pill_button(self.btn_chat_rect, "Telemetria", mouse_pos, is_active=self.chat_expanded, shortcut="C")
+
+        # Collapsible Telemetry Drawer
         if self.chat_expanded:
-            chat_height = 270
-            chat_box = pygame.Rect(chat_x, 56, chat_width, chat_height)
-            pygame.draw.rect(self.hud_surface, (12, 16, 24, 235), chat_box, border_radius=8)
-            pygame.draw.rect(self.hud_surface, (45, 55, 75, 200), chat_box, width=1, border_radius=8)
-
-            # Chat Header
-            hdr = "BUFFER (LAST 10 RAW SAMPLES):"
-            self.hud_surface.blit(self.font_main.render(hdr, True, (130, 150, 180)), (chat_x + 12, 64))
-
-            # Stream records
+            drawer_w = 460
+            drawer_x = self.width - drawer_w - 20
+            drawer_y = top_y + bar_h + 10
             history = self.buffer.get_history()
-            y_offset = 86
-            for idx, rec in enumerate(history):
-                # Clean format for user viewing
-                text = f"[{idx+1:02d}] t={rec.timestamp:05d}ms | R:{rec.roll:+5.1f}° P:{rec.pitch:+5.1f}° Y:{rec.yaw:+5.1f}°"
-                color = (0, 255, 200) if idx == len(history) - 1 else (190, 205, 225)
-                self.hud_surface.blit(self.font_main.render(text, True, color), (chat_x + 12, y_offset))
-                y_offset += 17
+            if history and self._session_base_ms == 0:
+                self._session_base_ms = history[0].timestamp
 
-            if not history:
-                self.hud_surface.blit(self.font_main.render("Waiting for telemetry stream in 'odometry/logs/telemetry.log'...", True, (240, 100, 100)), (chat_x + 12, 95))
+            row_h = 28
+            rows_count = max(1, len(history))
+            drawer_h = 46 + rows_count * row_h + 12
 
-        # -------------------------------------------------------------
-        # 4. Bottom-Left: RViz & Component Visibility Menu
-        # -------------------------------------------------------------
-        menu_y = self.height - 72
-        self.hud_surface.blit(self.font_main.render("COMPONENTES & RVIZ (VISIBILIDADE):", True, (0, 230, 255)), (15, menu_y - 20))
+            drawer_rect = pygame.Rect(drawer_x, drawer_y, drawer_w, drawer_h)
+            pygame.draw.rect(self.hud_surface, UITheme.PANEL_BG, drawer_rect, border_radius=10)
+            pygame.draw.rect(self.hud_surface, UITheme.BORDER, drawer_rect, width=1, border_radius=10)
 
+            # Table Columns Definition: (Header, X-Anchor, Align)
+            # Align 'left' anchors at x; Align 'right' aligns the right edge of header & values at x.
+            columns = [
+                ("AMOSTRA", drawer_x + 18, "left"),
+                ("TEMPO",   drawer_x + 168, "right"),
+                ("ROLL",    drawer_x + 258, "right"),
+                ("PITCH",   drawer_x + 350, "right"),
+                ("YAW",     drawer_x + drawer_w - 18, "right"),
+            ]
+
+            for col_title, col_x, align in columns:
+                hdr_surf = self.font_label.render(col_title, True, UITheme.TEXT_MUTED)
+                hx = col_x if align == "left" else (col_x - hdr_surf.get_width())
+                self.hud_surface.blit(hdr_surf, (hx, drawer_y + 13))
+
+            pygame.draw.line(
+                self.hud_surface, UITheme.DIVIDER,
+                (drawer_x + 14, drawer_y + 38), (drawer_x + drawer_w - 14, drawer_y + 38), 1
+            )
+
+            if history:
+                y_row = drawer_y + 45
+                for idx, rec in enumerate(history):
+                    is_last = (idx == len(history) - 1)
+                    if is_last:
+                        hl_rect = pygame.Rect(drawer_x + 8, y_row - 2, drawer_w - 16, row_h - 2)
+                        pygame.draw.rect(self.hud_surface, UITheme.PANEL_ROW_LATEST, hl_rect, border_radius=6)
+
+                    t_str = format_sample_time(rec.timestamp, self._session_base_ms).strip()
+                    cells = [
+                        f"#{idx+1:02d}",
+                        t_str,
+                        f"{rec.roll:+.1f}°",
+                        f"{rec.pitch:+.1f}°",
+                        f"{rec.yaw:+.1f}°",
+                    ]
+                    row_font = self.font_mono_bold if is_last else self.font_mono
+                    row_color = UITheme.TEXT_PRIMARY if is_last else UITheme.TEXT_SECONDARY
+
+                    for cell_text, (_, col_x, align) in zip(cells, columns):
+                        cell_surf = row_font.render(cell_text, True, row_color)
+                        cx = col_x if align == "left" else (col_x - cell_surf.get_width())
+                        self.hud_surface.blit(cell_surf, (cx, y_row + 2))
+
+                    y_row += row_h
+            else:
+                empty_s = self.font_ui.render("Aguardando dados de telemetria...", True, UITheme.TEXT_MUTED)
+                self.hud_surface.blit(empty_s, (drawer_x + 18, drawer_y + 46))
+
+        # =====================================================================
+        # 4. BOTTOM-CENTER: Floating Layer Visibility Dock
+        # =====================================================================
         layer_items = [
-            ("body", "1:CORPO", self.visibility.show_body),
-            ("arms", "2:HASTES", self.visibility.show_arms),
-            ("motors", "3:MOTORES", self.visibility.show_motors),
-            ("imu_axes", "4:RVIZ EIXOS", self.visibility.show_imu_axes),
-            ("grid", "5:GRADE", self.visibility.show_grid),
+            ("body", "Corpo", "1", self.visibility.show_body),
+            ("arms", "Braços", "2", self.visibility.show_arms),
+            ("motors", "Motores", "3", self.visibility.show_motors),
+            ("imu_axes", "Eixos", "4", self.visibility.show_imu_axes),
+            ("grid", "Grade", "5", self.visibility.show_grid),
         ]
 
-        bx = 15
+        pill_w = UITheme.DOCK_PILL_WIDTH
+        pill_h = UITheme.DOCK_PILL_HEIGHT
+        pill_gap = 4
+        dock_pad = 4
+        dock_w = len(layer_items) * pill_w + (len(layer_items) - 1) * pill_gap + dock_pad * 2
+        dock_h = pill_h + dock_pad * 2
+        dock_x = (self.width - dock_w) // 2
+        dock_y = self.height - dock_h - 28
+
+        dock_rect = pygame.Rect(dock_x, dock_y, dock_w, dock_h)
+        pygame.draw.rect(self.hud_surface, UITheme.PANEL_BG, dock_rect, border_radius=8)
+        pygame.draw.rect(self.hud_surface, UITheme.BORDER, dock_rect, width=1, border_radius=8)
+
+        bx = dock_x + dock_pad
+        by = dock_y + dock_pad
         self.layer_buttons = {}
-        for key, label, is_active in layer_items:
-            bw = 118
-            rect = pygame.Rect(bx, menu_y, bw, 28)
+        for key, label, shortcut, is_active in layer_items:
+            rect = pygame.Rect(bx, by, pill_w, pill_h)
             self.layer_buttons[key] = rect
-            
-            # Active vs inactive styling
-            bg_col = (18, 55, 42, 230) if is_active else (25, 28, 35, 190)
-            border_col = (0, 240, 140, 240) if is_active else (65, 75, 85, 180)
-            text_col = (0, 255, 170) if is_active else (135, 145, 155)
-            prefix = "[✓] " if is_active else "[ ] "
+            self._draw_pill_button(rect, label, mouse_pos, is_active=is_active, shortcut=shortcut, compact=True)
+            bx += pill_w + pill_gap
 
-            pygame.draw.rect(self.hud_surface, bg_col, rect, border_radius=5)
-            pygame.draw.rect(self.hud_surface, border_col, rect, width=1, border_radius=5)
-            self.hud_surface.blit(self.font_btn.render(prefix + label, True, text_col), (bx + 8, menu_y + 6))
-            bx += bw + 8
+        # Subtle bottom hint
+        hints = "Arrastar Esq: Órbita   ·   Arrastar Dir: Pan   ·   Scroll: Zoom"
+        hint_surf = self.font_label.render(hints, True, UITheme.TEXT_MUTED)
+        self.hud_surface.blit(hint_surf, ((self.width - hint_surf.get_width()) // 2, self.height - 26))
 
-        # Bottom Hints Bar
-        hints = "Orbit: Left Drag | Pan: Right Drag | Zoom: Wheel | H: Home | P: Proj | C: Chat | 1-5: Visibilidade"
-        self.hud_surface.blit(self.font_main.render(hints, True, (100, 120, 150)), (15, self.height - 20))
-
-
-        # Render 2D surface over OpenGL using textured orthographic quad
+        # =====================================================================
+        # 5. Composite 2D HUD Surface onto OpenGL Viewport
+        # =====================================================================
         data = pygame.image.tobytes(self.hud_surface, "RGBA", True)
         glBindTexture(GL_TEXTURE_2D, self.hud_texture)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.width, self.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data)
@@ -447,21 +677,21 @@ class Sim3DApp:
         glMatrixMode(GL_MODELVIEW)
         glPopMatrix()
 
-
     def run(self):
         clock = pygame.time.Clock()
         running = True
 
         while running:
-            # 1. Ingest new telemetry from file
-            self.buffer.poll_file(self.log_path)
+            # 1. Ingest new telemetry (only poll log file in mock mode; serial worker pushes directly)
+            if self.mode == "mock":
+                self.buffer.poll_file(self.log_path)
             latest = self.buffer.get_latest()
             if latest:
                 self.target_roll = latest.roll
                 self.target_pitch = latest.pitch
                 self.target_yaw = latest.yaw
 
-            # Smooth interpolation (0.2 factor for 60 FPS responsiveness)
+            # Smooth interpolation (0.25 factor for 60 FPS responsiveness)
             self.current_roll  += (self.target_roll  - self.current_roll)  * 0.25
             self.current_pitch += (self.target_pitch - self.current_pitch) * 0.25
             self.current_yaw   += (self.target_yaw   - self.current_yaw)   * 0.25
@@ -472,13 +702,15 @@ class Sim3DApp:
                     running = False
                 elif event.type == VIDEORESIZE:
                     self.width, self.height = event.size
-                    self.screen = pygame.display.set_mode((self.width, self.height), pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE)
+                    self._create_gl_window(self.width, self.height)
                     self.hud_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
                 elif event.type == KEYDOWN:
                     if event.key == K_ESCAPE:
                         running = False
                     elif event.key == K_h:
                         self.camera.reset_home()
+                    elif event.key == K_r:
+                        self.recalibrate_imu()
                     elif event.key == K_p:
                         self.camera.is_isometric = not self.camera.is_isometric
                     elif event.key == K_c:
@@ -494,34 +726,34 @@ class Sim3DApp:
                     elif event.key in (pygame.K_5, pygame.K_KP5):
                         self.visibility.toggle("grid")
                 elif event.type == MOUSEBUTTONDOWN:
-                    if event.button == 1: # Left click
-                        # Check HUD button clicks
+                    if event.button == 1:
                         mouse_pos = event.pos
                         layer_clicked = False
-                        if hasattr(self, 'layer_buttons'):
-                            for comp_key, rect in self.layer_buttons.items():
-                                if rect.collidepoint(mouse_pos):
-                                    self.visibility.toggle(comp_key)
-                                    layer_clicked = True
-                                    break
+                        for comp_key, rect in self.layer_buttons.items():
+                            if rect.collidepoint(mouse_pos):
+                                self.visibility.toggle(comp_key)
+                                layer_clicked = True
+                                break
 
                         if layer_clicked:
                             pass
-                        elif hasattr(self, 'btn_home_rect') and self.btn_home_rect.collidepoint(mouse_pos):
+                        elif hasattr(self, "btn_home_rect") and self.btn_home_rect.collidepoint(mouse_pos):
                             self.camera.reset_home()
-                        elif hasattr(self, 'btn_proj_rect') and self.btn_proj_rect.collidepoint(mouse_pos):
+                        elif hasattr(self, "btn_cal_rect") and self.btn_cal_rect.collidepoint(mouse_pos):
+                            self.recalibrate_imu()
+                        elif hasattr(self, "btn_proj_rect") and self.btn_proj_rect.collidepoint(mouse_pos):
                             self.camera.is_isometric = not self.camera.is_isometric
-                        elif hasattr(self, 'btn_chat_rect') and self.btn_chat_rect.collidepoint(mouse_pos):
+                        elif hasattr(self, "btn_chat_rect") and self.btn_chat_rect.collidepoint(mouse_pos):
                             self.chat_expanded = not self.chat_expanded
                         else:
                             self.mouse_left_down = True
                             self.last_mouse_pos = event.pos
-                    elif event.button == 3: # Right click (Pan)
+                    elif event.button == 3:
                         self.mouse_right_down = True
                         self.last_mouse_pos = event.pos
-                    elif event.button == 4: # Wheel Up (Zoom in)
+                    elif event.button == 4:
                         self.camera.distance = max(1.5, self.camera.distance - 0.4)
-                    elif event.button == 5: # Wheel Down (Zoom out)
+                    elif event.button == 5:
                         self.camera.distance = min(25.0, self.camera.distance + 0.4)
                 elif event.type == MOUSEBUTTONUP:
                     if event.button == 1:
@@ -534,14 +766,12 @@ class Sim3DApp:
                     self.last_mouse_pos = event.pos
 
                     if self.mouse_left_down:
-                        # Orbit
                         self.camera.azimuth += dx * 0.4
-                        self.camera.elevation = max(-89.0, min(89.0, self.camera.elevation - dy * 0.4))
+                        self.camera.elevation = max(-89.0, min(89.0, self.camera.elevation + dy * 0.4))
                     elif self.mouse_right_down:
-                        # Pan
                         factor = self.camera.distance * 0.002
                         self.camera.pan_x -= dx * factor
-                        self.camera.pan_y += dy * factor
+                        self.camera.pan_y -= dy * factor
 
             # 3. 3D OpenGL Rendering
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -552,16 +782,70 @@ class Sim3DApp:
                 self.draw_ground_grid()
             self.draw_drone()
 
-
             # 4. HUD 2D Overlay
             self.render_hud_overlay()
 
             pygame.display.flip()
             clock.tick(60)
 
+        # Cleanup background worker & processes
+        if self.serial_worker:
+            self.serial_worker.stop()
+        if self.mock_process:
+            self.mock_process.terminate()
+            try:
+                self.mock_process.wait(timeout=1.0)
+            except Exception:
+                self.mock_process.kill()
+
         pygame.quit()
 
+
 if __name__ == "__main__":
-    log_file = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_LOG_FILE
-    app = Sim3DApp(log_file)
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="sim3d",
+        description="Drone 3D Real-Time Odometry & Telemetry Simulator"
+    )
+    parser.add_argument(
+        "--serialplot", "--serial", "-s",
+        dest="mode",
+        action="store_const",
+        const="serial",
+        default="serial",
+        help="Capture telemetry directly from USB Serial (Default)"
+    )
+    parser.add_argument(
+        "--mock", "-m",
+        dest="mode",
+        action="store_const",
+        const="mock",
+        help="Use mock C kinematics simulation (odometry/tester -m)"
+    )
+    parser.add_argument(
+        "--port", "-p",
+        type=str,
+        default=None,
+        help="Serial port (e.g. /dev/ttyUSB0, /dev/ttyACM0). Auto-detected if omitted."
+    )
+    parser.add_argument(
+        "--baud", "-b",
+        type=int,
+        default=57600,
+        help="Baud rate (default: 57600)"
+    )
+    parser.add_argument(
+        "--log", "-l",
+        type=str,
+        default=DEFAULT_LOG_FILE,
+        help=f"Target telemetry log path (default: {DEFAULT_LOG_FILE})"
+    )
+
+    args = parser.parse_args()
+    app = Sim3DApp(
+        mode=args.mode,
+        port=args.port,
+        baudrate=args.baud,
+        log_path=args.log
+    )
     app.run()
