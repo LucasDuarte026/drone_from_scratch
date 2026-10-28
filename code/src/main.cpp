@@ -16,6 +16,15 @@ int temperature = 0;
 long acc_x = 0;
 long acc_y = 0;
 long acc_z = 0;
+long acc_bias[3] = {0, 0, 0}; // Stationary accelerometer bias offsets (X=0, Y=0, Z=+1g)
+
+long acc_sum_x = 0;
+long acc_sum_y = 0;
+long acc_sum_z = 0;
+uint8_t acc_sum_count = 0;
+float snap_ax_g = 0.0f;
+float snap_ay_g = 0.0f;
+float snap_az_g = 1.0f;
 
 int acc_axis[3] = {0, 0, 0};   // 0: X/Roll, 1: Y/Pitch, 2: Z/Yaw
 int gyro_axis[3] = {0, 0, 0};  // 0: X/Roll, 1: Y/Pitch, 2: Z/Yaw
@@ -41,6 +50,11 @@ float angle_yaw = 0.0f;
 
 int cal_int = 0;
 static uint8_t telemetry_counter = 0;
+
+// Built-in LED Visual Heartbeat (PIN_LED_STATUS / Pin 13)
+uint16_t led_toggle_interval = 10; // Number of telemetry collections between LED state toggles
+static uint16_t led_sample_count = 0;
+static bool led_builtin_state = false;
 
 // ============================================================================
 // IMU Register Configuration & Verification
@@ -137,10 +151,10 @@ void gyro_signalen() {
   gyro_axis[1] = (int16_t)(Wire.read() << 8 | Wire.read());
   gyro_axis[2] = (int16_t)(Wire.read() << 8 | Wire.read());
 
-  // Assign canonical global acceleration variables with mounting polarity
-  acc_x = (long)(acc_axis[0] * IMU_SIGN_X);
-  acc_y = (long)(acc_axis[1] * IMU_SIGN_Y);
-  acc_z = (long)(acc_axis[2] * IMU_SIGN_Z);
+  // Assign canonical global acceleration variables with mounting polarity and stationary bias
+  acc_x = (long)(acc_axis[0] * IMU_SIGN_X) - acc_bias[0];
+  acc_y = (long)(acc_axis[1] * IMU_SIGN_Y) - acc_bias[1];
+  acc_z = (long)(acc_axis[2] * IMU_SIGN_Z) - acc_bias[2];
 }
 
 // ============================================================================
@@ -151,10 +165,13 @@ void calibrate_imu(uint16_t samples) {
   gyro_axis_cal[0] = 0.0;
   gyro_axis_cal[1] = 0.0;
   gyro_axis_cal[2] = 0.0;
+  acc_bias[0] = 0;
+  acc_bias[1] = 0;
+  acc_bias[2] = 0;
 
-  double acc_sum_x = 0.0;
-  double acc_sum_y = 0.0;
-  double acc_sum_z = 0.0;
+  double acc_cal_sum_x = 0.0;
+  double acc_cal_sum_y = 0.0;
+  double acc_cal_sum_z = 0.0;
 
   for (uint16_t i = 0; i < samples; i++) {
     if (i % 64 == 0) {
@@ -165,9 +182,9 @@ void calibrate_imu(uint16_t samples) {
     gyro_axis_cal[1] += (gyro_axis[1] * IMU_SIGN_Y);
     gyro_axis_cal[2] += (gyro_axis[2] * IMU_SIGN_Z);
 
-    acc_sum_x += (double)acc_x;
-    acc_sum_y += (double)acc_y;
-    acc_sum_z += (double)acc_z;
+    acc_cal_sum_x += (double)acc_x;
+    acc_cal_sum_y += (double)acc_y;
+    acc_cal_sum_z += (double)acc_z;
     delay(3);
   }
 
@@ -175,19 +192,32 @@ void calibrate_imu(uint16_t samples) {
   gyro_axis_cal[1] /= (double)samples;
   gyro_axis_cal[2] /= (double)samples;
 
-  // Compute level reference offsets from average stationary gravity vector
-  double avg_ax = acc_sum_x / (double)samples;
-  double avg_ay = acc_sum_y / (double)samples;
-  double avg_az = acc_sum_z / (double)samples;
-  imu_calc_acc_angles(avg_ax, avg_ay, avg_az, &angle_roll_offset, &angle_pitch_offset);
+  // Calibrate accelerometer biases at the source so stationary state = (0, 0, +4096 LSB = +1.00g)
+  double avg_ax = acc_cal_sum_x / (double)samples;
+  double avg_ay = acc_cal_sum_y / (double)samples;
+  double avg_az = acc_cal_sum_z / (double)samples;
+  acc_bias[0] = (long)avg_ax;
+  acc_bias[1] = (long)avg_ay;
+  acc_bias[2] = (long)avg_az - (long)ACCEL_SENSITIVITY_LSB_G;
 
-  // Reset filter & integration states to zero
+  // Since acc_x, acc_y, acc_z are now level-compensated at the source, angle offsets are zero
+  angle_roll_offset = 0.0f;
+  angle_pitch_offset = 0.0f;
+
+  // Reset filter, decimation accumulator & integration states to zero
   gyro_roll_input = 0.0;
   gyro_pitch_input = 0.0;
   gyro_yaw_input = 0.0;
   angle_roll = 0.0f;
   angle_pitch = 0.0f;
   angle_yaw = 0.0f;
+  acc_sum_x = 0;
+  acc_sum_y = 0;
+  acc_sum_z = 0;
+  acc_sum_count = 0;
+  snap_ax_g = 0.0f;
+  snap_ay_g = 0.0f;
+  snap_az_g = 1.0f;
   first_angle = true;
   telemetry_counter = 0;
 
@@ -196,6 +226,8 @@ void calibrate_imu(uint16_t samples) {
     Serial.read();
   }
 
+  led_sample_count = 0;
+  led_builtin_state = true;
   digitalWrite(PIN_LED_WARNING, LOW);
   digitalWrite(PIN_LED_STATUS, HIGH);
   loop_timer = micros();
@@ -293,10 +325,25 @@ void loop() {
     angle_pitch = imu_fuse_angle(angle_pitch_gyro, angle_pitch_acc);
   }
 
-  // 8. Split 25 Hz Serial Telemetry across 2 ticks so 250 Hz (4000 us) budget never overruns!
+  // 8. Accumulate 250 Hz accelerometer samples over the 10-tick decimation window
+  //    and split 25 Hz Serial Telemetry across 2 ticks so 4000 us budget never overruns!
+  acc_sum_x += acc_x;
+  acc_sum_y += acc_y;
+  acc_sum_z += acc_z;
+  acc_sum_count++;
+
   telemetry_counter++;
   if (telemetry_counter == (TELEMETRY_DECIMATION / 2)) {
-    // Part 1 (Tick 5): Attitude angles
+    // Part 1 (Tick 5): Latch phase-synchronized averaged acceleration + print attitude angles
+    float inv_n = (acc_sum_count > 0) ? (1.0f / (float)acc_sum_count) : 1.0f;
+    snap_ax_g = ((float)acc_sum_x * inv_n) / ACCEL_SENSITIVITY_LSB_G;
+    snap_ay_g = ((float)acc_sum_y * inv_n) / ACCEL_SENSITIVITY_LSB_G;
+    snap_az_g = ((float)acc_sum_z * inv_n) / ACCEL_SENSITIVITY_LSB_G;
+    acc_sum_x = 0;
+    acc_sum_y = 0;
+    acc_sum_z = 0;
+    acc_sum_count = 0;
+
     Serial.print(angle_roll, 2);
     Serial.print(' ');
     Serial.print(angle_pitch, 2);
@@ -304,16 +351,21 @@ void loop() {
     Serial.print(angle_yaw, 2);
     Serial.print(' ');
   } else if (telemetry_counter >= TELEMETRY_DECIMATION) {
-    // Part 2 (Tick 10): Normalized accelerometer (g) + newline
+    // Part 2 (Tick 10): Print phase-synchronized averaged accelerometer (g) + newline
     telemetry_counter = 0;
-    float ax_g = (float)acc_x / ACCEL_SENSITIVITY_LSB_G;
-    float ay_g = (float)acc_y / ACCEL_SENSITIVITY_LSB_G;
-    float az_g = (float)acc_z / ACCEL_SENSITIVITY_LSB_G;
-    Serial.print(ax_g, 2);
+    Serial.print(snap_ax_g, 4);
     Serial.print(' ');
-    Serial.print(ay_g, 2);
+    Serial.print(snap_ay_g, 4);
     Serial.print(' ');
-    Serial.println(az_g, 2);
+    Serial.println(snap_az_g, 4);
+
+    // Visual heartbeat: toggle builtin LED every N telemetry collections (default N=10)
+    led_sample_count++;
+    if (led_sample_count >= led_toggle_interval) {
+      led_sample_count = 0;
+      led_builtin_state = !led_builtin_state;
+      digitalWrite(PIN_LED_STATUS, led_builtin_state ? HIGH : LOW);
+    }
   }
 
   // 9. Loop Overrun Watchdog

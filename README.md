@@ -87,3 +87,16 @@ flowchart LR
 > 4. **Verification & Testing (TDD & Odometry):** Write and execute automated Pytest suites and validate attitude stability using the real-time 3D simulation in [odometry/](odometry/).
 > 5. **Layer 5 (Knowledge Graph & Changelog):** Update [docs/CHANGELOG.md](docs/CHANGELOG.md) and run `graphify update .` to keep the knowledge graph synchronized.
 
+---
+
+## 🚀 Quick Operational Commands (`.venv` & PlatformIO)
+
+| Target Task | Command | Operational Notes |
+| :--- | :--- | :--- |
+| **Compile Firmware** | `pio run -e uno` | Compiles `code/src/main.cpp` using Atmel AVR toolchain. |
+| **Flash Arduino Uno** | `pio run -e uno -t upload` | Flashes ATmega328P via active serial port (`/dev/ttyUSB1`). |
+| **Launch 3D Simulator (Standard)** | `.venv/bin/python3 odometry/sim_3d.py` | Runs real-time 3D simulation with ZUPT, $0.05g$ deadband, and 1 Hz heartbeat. |
+| **Launch 3D Simulator (Verbose)** | `.venv/bin/python3 odometry/sim_3d.py -v` | Emits per-sample diagnostics with $\Delta t$, clamping tags, and ZUPT tags. |
+| **Run Full TDD Test Suite** | `.venv/bin/pytest odometry/tests/` | Runs all 22 automated Pytest unit and integration tests. |
+| **Compile C Driver Tester** | `make -C odometry` | Builds `odometry/tester` using host GCC. |
+

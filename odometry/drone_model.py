@@ -194,39 +194,61 @@ class VisibilityOptions:
 class InertialPositionEstimator:
     """
     Estimates 3D position (X, Y, Z) relative to Ground Reference Zero (Z = 0.0)
-    by rotating body-frame accelerometer readings into the world frame,
-    compensating gravity (1.0g), and integrating with deadband + ZUPT damping.
+    by rotating body-frame accelerometer readings into the world frame and subtracting gravity (1.0g).
+
+    Supports configurable decimal precision (`accel_decimals`, default 2) and multiple
+    integration methods saved for evolutionary testing:
+    - 'base_euler' (Default): Pure first-order Euler kinematics without deadband or artificial damping.
+    - 'trapezoidal': Second-order trapezoidal integration for velocity and position.
+    - 'zupt': Trapezoidal integration with deadband, adaptive bias tare, and Zero-Velocity Update (ZUPT).
     """
 
     def __init__(
         self,
         default_height: float = 1.0,
-        accel_deadband_g: float = 0.035,
-        vel_damping: float = 0.90,
+        accel_decimals: Optional[int] = None,
+        method: str = "base_euler",
+        accel_deadband_g: float = 0.05,
+        vel_damping: float = 1.0,
+        zupt: bool = True,
         scale_mps2: float = 9.81,
         max_radius: float = 8.0,
         max_height: float = 6.0
     ):
         self.default_height: float = max(0.0, float(default_height))
-        self.accel_deadband_g: float = accel_deadband_g
-        self.vel_damping: float = vel_damping
-        self.scale_mps2: float = scale_mps2
-        self.max_radius: float = max_radius
-        self.max_height: float = max_height
+        self.accel_decimals: Optional[int] = max(0, int(accel_decimals)) if accel_decimals is not None else None
+        self.method: str = method
+        self.accel_deadband_g: float = float(accel_deadband_g)
+        self.vel_damping: float = float(vel_damping)
+        self.zupt: bool = bool(zupt)
+        self.scale_mps2: float = float(scale_mps2)
+        self.max_radius: float = float(max_radius)
+        self.max_height: float = float(max_height)
         self.enabled: bool = True
 
         self.pos: Tuple[float, float, float] = (0.0, 0.0, self.default_height)
         self.vel: Tuple[float, float, float] = (0.0, 0.0, 0.0)
         self.lin_acc: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._prev_lin_acc: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self.world_bias: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._last_body_acc: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._last_raw_world_acc: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self.last_was_clamped: bool = False
+        self._stationary_count: int = 0
 
-    def zero_position(self):
+    def zero_position(self, tare_bias: bool = False):
         """
         Reset ONLY the 3D position back to (0.0, 0.0, default_height) and velocity to (0, 0, 0),
         leaving IMU attitude (Roll, Pitch, Yaw) untouched.
+        If tare_bias is True, captures current resting world acceleration as zero-reference bias.
         """
+        if tare_bias:
+            self.world_bias = self._last_raw_world_acc
         self.pos = (0.0, 0.0, self.default_height)
         self.vel = (0.0, 0.0, 0.0)
         self.lin_acc = (0.0, 0.0, 0.0)
+        self._prev_lin_acc = (0.0, 0.0, 0.0)
+        self._stationary_count = 0
 
     def set_default_height(self, height: float):
         """Adjust default reference hover height H0 above the Z=0 ground plane."""
@@ -235,6 +257,164 @@ class InertialPositionEstimator:
         px, py, pz = self.pos
         new_pz = max(0.0, min(self.max_height, pz + (self.default_height - old_h)))
         self.pos = (px, py, new_pz)
+
+    def _compute_world_linear_accel(
+        self,
+        roll_deg: float,
+        pitch_deg: float,
+        yaw_deg: float,
+        acc_x: float,
+        acc_y: float,
+        acc_z: float
+    ) -> Tuple[float, float, float]:
+        """Rotate body acceleration by R(roll, pitch, yaw), subtract 1g gravity, and round to accel_decimals."""
+        # 1. Round incoming body-frame acceleration to configured decimal precision (if set)
+        if self.accel_decimals is not None:
+            bx_in = round(float(acc_x), self.accel_decimals)
+            by_in = round(float(acc_y), self.accel_decimals)
+            bz_in = round(float(acc_z), self.accel_decimals)
+        else:
+            bx_in = float(acc_x)
+            by_in = float(acc_y)
+            bz_in = float(acc_z)
+        self._last_body_acc = (bx_in, by_in, bz_in)
+
+        # 2. Rotate into world frame: a_world = R * a_body - [0, 0, 1]^T
+        mat = euler_to_matrix(roll_deg, pitch_deg, yaw_deg)
+        raw_x = mat[0] * bx_in + mat[4] * by_in + mat[8] * bz_in
+        raw_y = mat[1] * bx_in + mat[5] * by_in + mat[9] * bz_in
+        raw_z = mat[2] * bx_in + mat[6] * by_in + mat[10] * bz_in - 1.0
+        self._last_raw_world_acc = (raw_x, raw_y, raw_z)
+
+        # 3. Subtract world tare bias (if captured via zero_position(tare_bias=True))
+        wbx, wby, wbz = self.world_bias
+        if self.accel_decimals is not None:
+            aw_x = round(raw_x - wbx, self.accel_decimals)
+            aw_y = round(raw_y - wby, self.accel_decimals)
+            aw_z = round(raw_z - wbz, self.accel_decimals)
+        else:
+            aw_x = raw_x - wbx
+            aw_y = raw_y - wby
+            aw_z = raw_z - wbz
+
+        # 4. Deadband (default 0.05g to reject MEMS sensor noise and drift at rest)
+        clamped = False
+        if self.accel_deadband_g > 0.0:
+            cx = 0.0 if abs(aw_x) < self.accel_deadband_g else aw_x
+            cy = 0.0 if abs(aw_y) < self.accel_deadband_g else aw_y
+            cz = 0.0 if abs(aw_z) < self.accel_deadband_g else aw_z
+            if (cx, cy, cz) != (aw_x, aw_y, aw_z):
+                clamped = True
+            aw_x, aw_y, aw_z = cx, cy, cz
+        self.last_was_clamped = clamped
+
+        return (aw_x, aw_y, aw_z)
+
+    def get_diagnostics_state(self) -> dict:
+        """Return snapshot dictionary for live telemetry logger inspection."""
+        return {
+            "body_acc": self._last_body_acc,
+            "world_raw": self._last_raw_world_acc,
+            "world_bias": self.world_bias,
+            "lin_acc": self.lin_acc,
+            "vel": self.vel,
+            "pos": self.pos,
+            "clamped": self.last_was_clamped,
+            "deadband": self.accel_deadband_g,
+            "zupt_active": self.zupt and self._stationary_count >= 3,
+        }
+
+    def _integrate_base_euler(self, aw_x: float, aw_y: float, aw_z: float, dt: float):
+        """Method 1 (Default): Textbook first-order Euler kinematics with Zero-Velocity Update (ZUPT)."""
+        if aw_x == 0.0 and aw_y == 0.0 and aw_z == 0.0:
+            self._stationary_count += 1
+        else:
+            self._stationary_count = 0
+
+        vx, vy, vz = self.vel
+        px, py, pz = self.pos
+
+        vx = (vx + aw_x * self.scale_mps2 * dt) * self.vel_damping
+        vy = (vy + aw_y * self.scale_mps2 * dt) * self.vel_damping
+        vz = (vz + aw_z * self.scale_mps2 * dt) * self.vel_damping
+
+        # Zero-Velocity Update (ZUPT): extinguish runaway velocity when device is stationary
+        if self.zupt and self._stationary_count >= 3:
+            vx *= 0.6
+            vy *= 0.6
+            vz *= 0.6
+            if abs(vx) < 0.01:
+                vx = 0.0
+            if abs(vy) < 0.01:
+                vy = 0.0
+            if abs(vz) < 0.01:
+                vz = 0.0
+
+        px = max(-self.max_radius, min(self.max_radius, px + vx * dt))
+        py = max(-self.max_radius, min(self.max_radius, py + vy * dt))
+        pz = max(0.0, min(self.max_height, pz + vz * dt))
+        if pz == 0.0 and vz < 0.0:
+            vz = 0.0
+
+        self.vel = (vx, vy, vz)
+        self.pos = (px, py, pz)
+
+    def _integrate_trapezoidal(self, aw_x: float, aw_y: float, aw_z: float, dt: float):
+        """Method 2 (Saved for future testing): Second-order trapezoidal rule for v and p with ZUPT."""
+        if aw_x == 0.0 and aw_y == 0.0 and aw_z == 0.0:
+            self._stationary_count += 1
+        else:
+            self._stationary_count = 0
+
+        vx, vy, vz = self.vel
+        px, py, pz = self.pos
+        pax, pay, paz = self._prev_lin_acc
+
+        new_vx = (vx + 0.5 * (pax + aw_x) * self.scale_mps2 * dt) * self.vel_damping
+        new_vy = (vy + 0.5 * (pay + aw_y) * self.scale_mps2 * dt) * self.vel_damping
+        new_vz = (vz + 0.5 * (paz + aw_z) * self.scale_mps2 * dt) * self.vel_damping
+
+        if self.zupt and self._stationary_count >= 3:
+            new_vx *= 0.6
+            new_vy *= 0.6
+            new_vz *= 0.6
+            if abs(new_vx) < 0.01:
+                new_vx = 0.0
+            if abs(new_vy) < 0.01:
+                new_vy = 0.0
+            if abs(new_vz) < 0.01:
+                new_vz = 0.0
+
+        px = max(-self.max_radius, min(self.max_radius, px + 0.5 * (vx + new_vx) * dt))
+        py = max(-self.max_radius, min(self.max_radius, py + 0.5 * (vy + new_vy) * dt))
+        pz = max(0.0, min(self.max_height, pz + 0.5 * (vz + new_vz) * dt))
+        if pz == 0.0 and new_vz < 0.0:
+            new_vz = 0.0
+
+        self.vel = (new_vx, new_vy, new_vz)
+        self.pos = (px, py, pz)
+
+    def _integrate_zupt(self, aw_x: float, aw_y: float, aw_z: float, dt: float):
+        """Method 3 (Saved for future testing): Trapezoidal integration + Zero-Velocity Update (ZUPT)."""
+        if aw_x == 0.0 and aw_y == 0.0 and aw_z == 0.0:
+            self._stationary_count += 1
+        else:
+            self._stationary_count = 0
+
+        self._integrate_trapezoidal(aw_x, aw_y, aw_z, dt)
+
+        if self._stationary_count >= 3:
+            vx, vy, vz = self.vel
+            vx *= 0.5
+            vy *= 0.5
+            vz *= 0.5
+            if abs(vx) < 1e-3:
+                vx = 0.0
+            if abs(vy) < 1e-3:
+                vy = 0.0
+            if abs(vz) < 1e-3:
+                vz = 0.0
+            self.vel = (vx, vy, vz)
 
     def update(
         self,
@@ -248,53 +428,23 @@ class InertialPositionEstimator:
     ) -> Tuple[float, float, float]:
         """Update world-frame linear acceleration, velocity, and 3D position."""
         dt = max(0.001, min(0.2, float(dt)))
-        mat = euler_to_matrix(roll_deg, pitch_deg, yaw_deg)
-
-        # Rotate body acceleration into world frame: a_world = R * a_body
-        aw_x = mat[0] * acc_x + mat[4] * acc_y + mat[8] * acc_z
-        aw_y = mat[1] * acc_x + mat[5] * acc_y + mat[9] * acc_z
-        aw_z = mat[2] * acc_x + mat[6] * acc_y + mat[10] * acc_z - 1.0
-
-        # Deadband filter for sensor noise
-        if abs(aw_x) < self.accel_deadband_g:
-            aw_x = 0.0
-        if abs(aw_y) < self.accel_deadband_g:
-            aw_y = 0.0
-        if abs(aw_z) < self.accel_deadband_g:
-            aw_z = 0.0
-
+        aw_x, aw_y, aw_z = self._compute_world_linear_accel(
+            roll_deg, pitch_deg, yaw_deg, acc_x, acc_y, acc_z
+        )
         self.lin_acc = (aw_x, aw_y, aw_z)
 
         if not self.enabled:
+            self._prev_lin_acc = self.lin_acc
             return self.pos
 
-        vx, vy, vz = self.vel
-        px, py, pz = self.pos
-
-        # Zero-Velocity Update (ZUPT): fast damping when accelerometer is stationary
-        if aw_x == 0.0 and aw_y == 0.0 and aw_z == 0.0:
-            vx *= 0.65
-            vy *= 0.65
-            vz *= 0.65
-            if abs(vx) < 1e-3:
-                vx = 0.0
-            if abs(vy) < 1e-3:
-                vy = 0.0
-            if abs(vz) < 1e-3:
-                vz = 0.0
+        if self.method == "trapezoidal":
+            self._integrate_trapezoidal(aw_x, aw_y, aw_z, dt)
+        elif self.method == "zupt":
+            self._integrate_zupt(aw_x, aw_y, aw_z, dt)
         else:
-            vx = (vx + aw_x * self.scale_mps2 * dt) * self.vel_damping
-            vy = (vy + aw_y * self.scale_mps2 * dt) * self.vel_damping
-            vz = (vz + aw_z * self.scale_mps2 * dt) * self.vel_damping
+            self._integrate_base_euler(aw_x, aw_y, aw_z, dt)
 
-        px = max(-self.max_radius, min(self.max_radius, px + vx * dt))
-        py = max(-self.max_radius, min(self.max_radius, py + vy * dt))
-        pz = max(0.0, min(self.max_height, pz + vz * dt))
-        if pz == 0.0 and vz < 0.0:
-            vz = 0.0
-
-        self.vel = (vx, vy, vz)
-        self.pos = (px, py, pz)
+        self._prev_lin_acc = (aw_x, aw_y, aw_z)
         return self.pos
 
 

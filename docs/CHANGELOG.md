@@ -4,6 +4,34 @@ All notable changes to the **Arduino Quadcopter Flight Controller (`drone`)** pr
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to **Spec-Driven Development (SDD)**.
 
+## [0.5.0] - 2026-10-28
+
+### Added
+- **Zero-Velocity Update (ZUPT) & Noise Deadband (`odometry/drone_model.py`):**
+  - Integrated physical stationary motion detection: when world-frame acceleration falls within the deadband ($|a_w| < 0.05g$) for $\ge 3$ consecutive samples (~120 ms), ZUPT exponentially bleeds residual velocity to zero (`vx *= 0.6` until $|v| < 0.01\text{ m/s} \implies 0.00\text{ m/s}$), solving velocity integration runaway from discrete deadband asymmetry upon manual stopping. Configurable via `zupt: bool = True` and CLI `--no-zupt`.
+  - Configured $0.05g$ default noise deadband (`accel_deadband_g = 0.05`, `--deadband 0.05`) to reject stationary MEMS thermal drift and quantization noise.
+  - Added `get_diagnostics_state()` returning a dictionary of body acceleration, world raw, world bias tare, linear acceleration, velocity, position, clamping state, and ZUPT activation.
+- **Dual-Tier Telemetry & Diagnostics Logger (`odometry/telemetry_logger.py`):**
+  - Implemented dual-destination logging emitting formatted console text with ANSI color tokens and persistent file output to `odometry/logs/sim_diagnostics.log`.
+  - **Standard Mode (Default):** Captures lifecycle events and a 1 Hz system health heartbeat (`[INFO ] [HEARTBEAT] #...`).
+  - **Verbose Mode (`-v` / `--verbose`):** Emits complete per-sample forensic diagnostic lines with $\Delta t$, clamping tags (`[CLAMP <0.05g]`), and ZUPT activation tags (`[ZUPT ACTIVE]`).
+- **Calibration Warning Modal & Integration Pause (`odometry/sim_3d.py`):**
+  - Renders a prominent amber modal overlay (`IMU CALIBRATION IN PROGRESS`, `KEEP DRONE COMPLETELY MOTIONLESS`) with live countdown timer and progress bar during the 3.0s calibration routine.
+  - Completely pauses kinematic integration during calibration and auto-tares the post-calibration resting acceleration as world zero reference.
+- **3D Velocity HUD Card Row (`odometry/sim_3d.py`):**
+  - Expanded the top-left odometry card to display `VEL 3D (m/s): Vx +0.00 Vy +0.00 Vz +0.00` in soft technical blue (`UITheme.ACCENT_BLUE = (96, 165, 250)`) between position and linear acceleration.
+- **Phase-Synchronized Latching & Built-in LED Heartbeat (`code/src/main.cpp`):**
+  - Calibrated stationary accelerometer biases (`acc_bias[0..2]`) at the source during `calibrate_imu()`, ensuring resting readings equal $(0, 0, +4096\text{ LSB} = +1.00g)$ and eliminating attitude/acceleration offset mismatch.
+  - Accumulated 250 Hz accelerometer readings over the 10-tick decimation window and latched the average at **Tick 5** alongside attitude angles, eliminating the 20 ms phase skew between attitude and acceleration.
+  - Added a visual heartbeat toggling the onboard LED (Pin 13 / `LED_BUILTIN` / `PIN_LED_STATUS`) every 10 telemetry transmission cycles (`led_toggle_interval = 10`, $1.25\text{ Hz}$ blink) for immediate visual confirmation of firmware execution.
+  - Emitted full 4-decimal acceleration telemetry over serial (`Serial.print(snap_ax_g, 4)`), preserving 100% of the raw 16-bit MPU-6050 resolution.
+
+### Changed
+- **Unconstrained Floating-Point Kinematics (`odometry/drone_model.py`, `odometry/sim_3d.py`):**
+  - Removed the temporary 2-decimal truncation filter (`accel_decimals = None` by default), restoring continuous float64 precision across all kinematic calculations while preserving `--accel-decimals` for comparative benchmarking.
+- **Sample-Synchronous Integration (`odometry/sim_3d.py`):**
+  - Restricted `pos_estimator.update()` to execute strictly once per newly arrived serial packet at 25 Hz (`id(latest) != self._last_ingested_id`), eliminating duplicate-sample integration artifacts at 60 FPS.
+
 ## [0.4.0] - 2026-10-27
 
 ### Added

@@ -21,7 +21,7 @@ from typing import Optional
 import pygame
 import pygame.gfxdraw
 from pygame.locals import (
-    QUIT, KEYDOWN, K_ESCAPE, K_h, K_p, K_c, K_r, K_s,
+    QUIT, KEYDOWN, K_ESCAPE, K_h, K_p, K_c, K_r, K_s, K_z, K_f,
     MOUSEBUTTONDOWN, MOUSEBUTTONUP, MOUSEMOTION, VIDEORESIZE
 )
 
@@ -34,16 +34,22 @@ try:
     )
     from odometry.drone_model import (
         DroneDimensions, DroneGeometry, draw_cuboid, draw_cylinder,
-        euler_to_matrix, VisibilityOptions, draw_imu_axes
+        euler_to_matrix, VisibilityOptions, draw_imu_axes,
+        InertialPositionEstimator, TrajectoryTrail,
+        draw_trajectory_trail, draw_ground_drop_laser
     )
+    from odometry.telemetry_logger import TelemetryLogger
 except ImportError:
     from telemetry_reader import (
         TelemetryBuffer, SerialTelemetryWorker, find_serial_port
     )
     from drone_model import (
         DroneDimensions, DroneGeometry, draw_cuboid, draw_cylinder,
-        euler_to_matrix, VisibilityOptions, draw_imu_axes
+        euler_to_matrix, VisibilityOptions, draw_imu_axes,
+        InertialPositionEstimator, TrajectoryTrail,
+        draw_trajectory_trail, draw_ground_drop_laser
     )
+    from telemetry_logger import TelemetryLogger
 
 
 DEFAULT_LOG_FILE = "odometry/logs/telemetry.log"
@@ -66,6 +72,7 @@ class UITheme:
     TEXT_PRIMARY = (244, 246, 250)              # Crisp off-white for values & active items
     TEXT_SECONDARY = (205, 212, 224)            # Secondary text
     TEXT_MUTED = (145, 154, 170)                # Muted labels & key hints
+    ACCENT_BLUE = (96, 165, 250)                # Soft technical blue for velocity
     STATUS_ONLINE = (16, 185, 129)              # Emerald green (#10B981)
     STATUS_OFFLINE = (239, 68, 68)              # Coral red (#EF4444)
 
@@ -85,18 +92,18 @@ def format_sample_time(timestamp_ms: int, base_ms: int = 0) -> str:
 
 class CameraState:
     def __init__(self):
-        self.reset_home()
         self.is_isometric = False
-        self.pan_x = 0.0
-        self.pan_y = 0.0
+        self.follow_drone = False
+        self.reset_home()
 
     def reset_home(self):
-        """Set to default isometric zero view."""
+        """Set to default isometric zero view above the Z=0 ground plane."""
         self.azimuth = 45.0      # deg
-        self.elevation = 30.0    # deg
-        self.distance = 6.0      # units
+        self.elevation = 28.0    # deg
+        self.distance = 6.5      # units
         self.pan_x = 0.0
         self.pan_y = 0.0
+        self.target_z = 0.75
 
 
 class Sim3DApp:
@@ -106,7 +113,12 @@ class Sim3DApp:
         port: str = None,
         baudrate: int = 57600,
         log_path: str = DEFAULT_LOG_FILE,
-        mode: str = None
+        mode: str = None,
+        accel_decimals: Optional[int] = None,
+        accel_deadband: float = 0.05,
+        int_method: str = "base_euler",
+        zupt: bool = True,
+        verbose: bool = False,
     ):
         if mode is not None:
             self.mode = mode
@@ -155,6 +167,22 @@ class Sim3DApp:
         self.dims = DroneDimensions()
         self.geom = DroneGeometry(self.dims)
         self.visibility = VisibilityOptions()
+        self.pos_estimator = InertialPositionEstimator(
+            default_height=1.0,
+            accel_decimals=accel_decimals,
+            method=int_method,
+            accel_deadband_g=accel_deadband,
+            zupt=zupt,
+        )
+        self.logger = TelemetryLogger(
+            verbose=verbose,
+            log_file="odometry/logs/sim_diagnostics.log"
+        )
+        self.trail = TrajectoryTrail(max_points=240, fade_duration=4.0, min_dist=0.015)
+        self.trail.add_point(*self.pos_estimator.pos)
+        self._last_ingested_id: Optional[int] = None
+        self._last_sample_mono: float = time.monotonic()
+        self._last_physics_time: float = time.monotonic()
         self.layer_buttons = {}
 
         # Camera & Projection
@@ -173,7 +201,9 @@ class Sim3DApp:
 
         # UI State
         self.chat_expanded = True
-        self._calibrating_until: float = 0.0
+        self._calibrating_duration: float = 3.0
+        self._is_calibrating: bool = True
+        self._calibrating_until: float = time.monotonic() + self._calibrating_duration
         self.width = WINDOW_WIDTH
         self.height = WINDOW_HEIGHT
 
@@ -266,56 +296,89 @@ class Sim3DApp:
         rad_az = math.radians(self.camera.azimuth)
         rad_el = math.radians(self.camera.elevation)
 
-        cam_x = self.camera.distance * math.cos(rad_el) * math.sin(rad_az) + self.camera.pan_x
-        cam_y = self.camera.distance * math.cos(rad_el) * math.cos(rad_az) + self.camera.pan_y
-        cam_z = self.camera.distance * math.sin(rad_el)
+        if self.camera.follow_drone:
+            dx, dy, dz = self.pos_estimator.pos
+            tx = dx + self.camera.pan_x
+            ty = dy + self.camera.pan_y
+            tz = dz
+        else:
+            tx = self.camera.pan_x
+            ty = self.camera.pan_y
+            tz = self.camera.target_z
+
+        cam_x = tx + self.camera.distance * math.cos(rad_el) * math.sin(rad_az)
+        cam_y = ty + self.camera.distance * math.cos(rad_el) * math.cos(rad_az)
+        cam_z = tz + self.camera.distance * math.sin(rad_el)
 
         gluLookAt(
             cam_x, cam_y, cam_z,
-            self.camera.pan_x, self.camera.pan_y, 0.0,
+            tx, ty, tz,
             0.0, 0.0, 1.0
         )
 
     def draw_ground_grid(self):
-        """Draws subtle ground reference plane with X (+Red), Y (+Green), Z (+Blue) origin axes."""
+        """Draws ground reference plane at Z = 0.0 with Landing Pad and X (+Red), Y (+Green), Z (+Blue) origin axes."""
         glDisable(GL_LIGHTING)
         glLineWidth(1.0)
         glBegin(GL_LINES)
         glColor4f(0.18, 0.20, 0.24, 0.55)
 
-        grid_size = 5.0
+        grid_size = 5.5
         step = 0.5
         x = -grid_size
         while x <= grid_size + 1e-4:
-            glVertex3f(x, -grid_size, -1.0)
-            glVertex3f(x,  grid_size, -1.0)
-            glVertex3f(-grid_size, x, -1.0)
-            glVertex3f( grid_size, x, -1.0)
+            glVertex3f(x, -grid_size, 0.0)
+            glVertex3f(x,  grid_size, 0.0)
+            glVertex3f(-grid_size, x, 0.0)
+            glVertex3f( grid_size, x, 0.0)
             x += step
         glEnd()
 
-        # Origin Axis pointers
+        # Landing Pad Circle at Ground Origin (0, 0, 0)
+        glLineWidth(1.8)
+        glBegin(GL_LINE_LOOP)
+        glColor4f(0.25, 0.55, 0.85, 0.55)
+        pad_r = 0.60
+        for i in range(36):
+            ang = 2.0 * math.pi * i / 36.0
+            glVertex3f(pad_r * math.cos(ang), pad_r * math.sin(ang), 0.002)
+        glEnd()
+
+        # Origin Axis pointers at Z = 0.0
         glLineWidth(2.0)
         glBegin(GL_LINES)
         glColor4f(0.85, 0.25, 0.25, 0.85)
-        glVertex3f(0.0, 0.0, -0.98)
-        glVertex3f(1.2, 0.0, -0.98)
+        glVertex3f(0.0, 0.0, 0.004)
+        glVertex3f(1.2, 0.0, 0.004)
 
         glColor4f(0.20, 0.78, 0.38, 0.85)
-        glVertex3f(0.0, 0.0, -0.98)
-        glVertex3f(0.0, 1.2, -0.98)
+        glVertex3f(0.0, 0.0, 0.004)
+        glVertex3f(0.0, 1.2, 0.004)
 
         glColor4f(0.25, 0.50, 0.90, 0.85)
-        glVertex3f(0.0, 0.0, -0.98)
-        glVertex3f(0.0, 0.0, -0.3)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(0.0, 0.0, 0.7)
         glEnd()
 
         glEnable(GL_LIGHTING)
 
     def draw_drone(self):
+        dx, dy, dz = self.pos_estimator.pos
+
+        # World-space fading 3D trajectory trail
+        if self.visibility.show_trail:
+            draw_trajectory_trail(self.trail.get_active_points())
+
+        # Vertical laser & target shadow from drone center (dx, dy, dz) to floor (dx, dy, 0.0)
+        if self.visibility.show_ground_laser:
+            draw_ground_drop_laser(dx, dy, dz)
+
         glPushMatrix()
 
-        # Apply Attitude (Euler Rotation Matrix)
+        # 1. Translate drone to 3D position relative to ground reference (Z = 0.0)
+        glTranslatef(dx, dy, dz)
+
+        # 2. Apply Attitude (Euler Rotation Matrix)
         rot_mat = euler_to_matrix(self.current_roll, self.current_pitch, self.current_yaw)
         glMultMatrixf(rot_mat)
 
@@ -433,8 +496,16 @@ class Sim3DApp:
         if self.serial_worker:
             self.serial_worker.toggle_user_connected()
 
+    def zero_drone_position(self):
+        """Reset ONLY 3D position to (0, 0, H0), zero velocity, and tare residual world accel bias."""
+        self.pos_estimator.zero_position(tare_bias=True)
+        self.trail.clear()
+        self.trail.add_point(*self.pos_estimator.pos)
+        bx, by, bz = self.pos_estimator.world_bias
+        self.logger.log_event("INFO", f"Zeroed 3D position (0,0,{self.pos_estimator.default_height:0.1f}m) | Captured tare bias: ({bx:+0.2f}, {by:+0.2f}, {bz:+0.2f})g")
+
     def recalibrate_imu(self):
-        """Send 'C' recalibration signal to Arduino over Serial and zero attitude state."""
+        """Send 'C' recalibration signal to Arduino over Serial, zero attitude, and pause integration during routine."""
         if self.serial_worker:
             self.serial_worker.request_calibration()
         self.target_roll = 0.0
@@ -443,7 +514,10 @@ class Sim3DApp:
         self.current_roll = 0.0
         self.current_pitch = 0.0
         self.current_yaw = 0.0
-        self._calibrating_until = time.monotonic() + 1.6
+        self._is_calibrating = True
+        self._calibrating_duration = 3.0
+        self._calibrating_until = time.monotonic() + self._calibrating_duration
+        self.logger.log_event("WARN", "IMU Calibration triggered... Keep drone completely motionless for 3 seconds!")
 
     def render_hud_overlay(self):
         """Draws a minimal, unified 2-bar HUD: Top Instrument Bar + Centered Bottom Dock."""
@@ -492,24 +566,28 @@ class Sim3DApp:
         self.hud_surface.blit(status_surf, (status_rect.x + 38, top_y + (bar_h - status_surf.get_height()) // 2))
 
         # =====================================================================
-        # 2. TOP-CENTER: Unified Attitude Readout Pill (Roll | Pitch | Yaw)
+        # 2. TOP-CENTER: Unified Attitude & Altitude Readout Pill (Roll | Pitch | Yaw | Alt Z)
         # =====================================================================
         latest = self.buffer.get_latest()
         r_deg = latest.roll if latest else self.current_roll
         p_deg = latest.pitch if latest else self.current_pitch
         y_deg = latest.yaw if latest else self.current_yaw
+        px, py, pz = self.pos_estimator.pos
+        vx, vy, vz = self.pos_estimator.vel
+        ax, ay, az = self.pos_estimator.lin_acc
 
-        col_w = 180
-        att_w = col_w * 3
-        att_x = max(status_rect.right + 16, (self.width - att_w) // 2)
+        col_w = 122
+        att_w = col_w * 4
+        att_x = max(status_rect.right + 14, (self.width - att_w) // 2 - 20)
         att_rect = pygame.Rect(att_x, top_y, att_w, bar_h)
         pygame.draw.rect(self.hud_surface, UITheme.PANEL_BG, att_rect, border_radius=10)
         pygame.draw.rect(self.hud_surface, UITheme.BORDER, att_rect, width=1, border_radius=10)
 
         axes_readout = [
-            ("ROLL", f"{r_deg:+6.1f}°"),
-            ("PITCH", f"{p_deg:+6.1f}°"),
-            ("YAW", f"{y_deg:+6.1f}°"),
+            ("ROLL", f"{r_deg:+5.1f}°"),
+            ("PITCH", f"{p_deg:+5.1f}°"),
+            ("YAW", f"{y_deg:+5.1f}°"),
+            ("ALT Z", f"{pz:4.2f}m"),
         ]
         for i, (axis_lbl, val_str) in enumerate(axes_readout):
             cx = att_x + i * col_w
@@ -519,29 +597,50 @@ class Sim3DApp:
                     (cx, top_y + 10), (cx, top_y + bar_h - 10), 1
                 )
             lbl_s = self.font_label.render(axis_lbl, True, UITheme.TEXT_MUTED)
-            val_s = self.font_value.render(val_str, True, UITheme.TEXT_PRIMARY)
-            self.hud_surface.blit(lbl_s, (cx + 16, top_y + (bar_h - lbl_s.get_height()) // 2))
-            self.hud_surface.blit(val_s, (cx + col_w - val_s.get_width() - 16, top_y + (bar_h - val_s.get_height()) // 2))
+            val_s = self.font_ui_bold.render(val_str, True, UITheme.TEXT_PRIMARY)
+            self.hud_surface.blit(lbl_s, (cx + 10, top_y + (bar_h - lbl_s.get_height()) // 2))
+            self.hud_surface.blit(val_s, (cx + col_w - val_s.get_width() - 10, top_y + (bar_h - val_s.get_height()) // 2))
 
         # =====================================================================
-        # 3. TOP-RIGHT: Camera, Recalibration & Telemetry Drawer Controls
+        # 2B. TOP-LEFT SUB-ROW: Physical Odometry Controls (Z Zero | R Calibrate | F Camera) + 3D Readout
+        # =====================================================================
+        sub_y = top_y + bar_h + 10
+        sub_h = 36
+        self.btn_zero_rect = pygame.Rect(20, sub_y, 98, sub_h)
+        self.btn_cal_rect = pygame.Rect(self.btn_zero_rect.right + 8, sub_y, 118, sub_h)
+        self.btn_cam_rect = pygame.Rect(self.btn_cal_rect.right + 8, sub_y, 104, sub_h)
+
+        cal_label = "Calibrating" if is_calibrating else "Calibrate"
+        cam_label = "Follow" if self.camera.follow_drone else "Static"
+        self._draw_pill_button(self.btn_zero_rect, "Zero", mouse_pos, is_active=False, shortcut="Z")
+        self._draw_pill_button(self.btn_cal_rect, cal_label, mouse_pos, is_active=is_calibrating, shortcut="R")
+        self._draw_pill_button(self.btn_cam_rect, cam_label, mouse_pos, is_active=self.camera.follow_drone, shortcut="F")
+
+        odom_rect = pygame.Rect(20, sub_y + sub_h + 8, 344, 66)
+        pygame.draw.rect(self.hud_surface, UITheme.PANEL_BG, odom_rect, border_radius=8)
+        pygame.draw.rect(self.hud_surface, UITheme.BORDER, odom_rect, width=1, border_radius=8)
+        pos_line = f"POS 3D (m)  : X {px:+5.2f}   Y {py:+5.2f}   Z {pz:4.2f}"
+        vel_line = f"VEL 3D (m/s): Vx {vx:+5.2f}  Vy {vy:+5.2f}  Vz {vz:+5.2f}"
+        acc_line = f"LIN ACC (g) : Ax {ax:+5.2f}  Ay {ay:+5.2f}  Az {az:+5.2f}"
+        self.hud_surface.blit(self.font_dock_bold.render(pos_line, True, UITheme.TEXT_PRIMARY), (32, odom_rect.y + 8))
+        self.hud_surface.blit(self.font_dock_bold.render(vel_line, True, UITheme.ACCENT_BLUE), (32, odom_rect.y + 26))
+        self.hud_surface.blit(self.font_dock.render(acc_line, True, UITheme.TEXT_MUTED), (32, odom_rect.y + 44))
+
+        # =====================================================================
+        # 3. TOP-RIGHT: View & Telemetry Drawer Controls (H Reset | P Persp | C Telemetry)
         # =====================================================================
         btn_gap = 8
         chat_btn_w = 138
         proj_btn_w = 144
-        cal_btn_w = 118
         home_btn_w = 98
 
         right_edge = self.width - 20
         self.btn_chat_rect = pygame.Rect(right_edge - chat_btn_w, top_y, chat_btn_w, bar_h)
         self.btn_proj_rect = pygame.Rect(self.btn_chat_rect.left - btn_gap - proj_btn_w, top_y, proj_btn_w, bar_h)
-        self.btn_cal_rect = pygame.Rect(self.btn_proj_rect.left - btn_gap - cal_btn_w, top_y, cal_btn_w, bar_h)
-        self.btn_home_rect = pygame.Rect(self.btn_cal_rect.left - btn_gap - home_btn_w, top_y, home_btn_w, bar_h)
+        self.btn_home_rect = pygame.Rect(self.btn_proj_rect.left - btn_gap - home_btn_w, top_y, home_btn_w, bar_h)
 
         proj_label = "Isometric" if self.camera.is_isometric else "Perspective"
-        cal_label = "Calibrating" if is_calibrating else "Calibrate"
         self._draw_pill_button(self.btn_home_rect, "Reset", mouse_pos, is_active=False, shortcut="H")
-        self._draw_pill_button(self.btn_cal_rect, cal_label, mouse_pos, is_active=is_calibrating, shortcut="R")
         self._draw_pill_button(self.btn_proj_rect, proj_label, mouse_pos, is_active=self.camera.is_isometric, shortcut="P")
         self._draw_pill_button(self.btn_chat_rect, "Telemetry", mouse_pos, is_active=self.chat_expanded, shortcut="C")
 
@@ -612,7 +711,7 @@ class Sim3DApp:
                 self.hud_surface.blit(empty_s, (drawer_x + 18, drawer_y + 46))
 
         # =====================================================================
-        # 4. BOTTOM-CENTER: Floating Layer Visibility Dock
+        # 4. BOTTOM-CENTER: Floating Layer Visibility Dock (Compact 50%)
         # =====================================================================
         layer_items = [
             ("body", "Body", "1", self.visibility.show_body),
@@ -620,6 +719,8 @@ class Sim3DApp:
             ("motors", "Motors", "3", self.visibility.show_motors),
             ("imu_axes", "Axes", "4", self.visibility.show_imu_axes),
             ("grid", "Grid", "5", self.visibility.show_grid),
+            ("trail", "Trail", "6", self.visibility.show_trail),
+            ("ground_laser", "Laser", "7", self.visibility.show_ground_laser),
         ]
 
         pill_w = UITheme.DOCK_PILL_WIDTH
@@ -648,6 +749,50 @@ class Sim3DApp:
         hints = "Left Drag: Orbit   ·   Right Drag: Pan   ·   Scroll: Zoom"
         hint_surf = self.font_label.render(hints, True, UITheme.TEXT_MUTED)
         self.hud_surface.blit(hint_surf, ((self.width - hint_surf.get_width()) // 2, self.height - 26))
+
+        # =====================================================================
+        # 4B. CALIBRATION WARNING MODAL (Active until calibration completes)
+        # =====================================================================
+        if is_calibrating:
+            remaining = max(0.0, self._calibrating_until - time.monotonic())
+            cal_duration = getattr(self, "_calibrating_duration", 3.0)
+            progress = max(0.0, min(1.0, 1.0 - (remaining / (cal_duration if cal_duration > 0 else 3.0))))
+
+            card_w = min(600, self.width - 40)
+            card_h = 138
+            card_x = (self.width - card_w) // 2
+            card_y = top_y + bar_h + 18
+
+            card_rect = pygame.Rect(card_x, card_y, card_w, card_h)
+            # Translucent dark slate modal backdrop with amber warning border
+            pygame.draw.rect(self.hud_surface, (18, 22, 28, 246), card_rect, border_radius=12)
+            pygame.draw.rect(self.hud_surface, (245, 180, 40, 230), card_rect, width=2, border_radius=12)
+
+            # Warning header badge + countdown
+            badge_surf = self.font_label.render("IMU CALIBRATION IN PROGRESS", True, (245, 180, 40))
+            self.hud_surface.blit(badge_surf, (card_x + 24, card_y + 16))
+
+            countdown_str = f"{remaining:3.1f}s remaining"
+            countdown_surf = self.font_mono_bold.render(countdown_str, True, UITheme.TEXT_SECONDARY)
+            self.hud_surface.blit(countdown_surf, (card_x + card_w - countdown_surf.get_width() - 24, card_y + 16))
+
+            # Primary instruction banner
+            title_surf = self.font_ui_bold.render("KEEP DRONE COMPLETELY MOTIONLESS", True, UITheme.TEXT_PRIMARY)
+            self.hud_surface.blit(title_surf, (card_x + 24, card_y + 44))
+
+            # Operational guidance subtext
+            desc1_surf = self.font_dock.render("Keep device static on a flat surface without rotation or acceleration.", True, UITheme.TEXT_SECONDARY)
+            self.hud_surface.blit(desc1_surf, (card_x + 24, card_y + 72))
+            desc2_surf = self.font_dock.render("Measuring stationary gyro and accelerometer reference biases...", True, UITheme.TEXT_MUTED)
+            self.hud_surface.blit(desc2_surf, (card_x + 24, card_y + 90))
+
+            # Progress bar
+            pbar_bg = pygame.Rect(card_x + 24, card_y + card_h - 18, card_w - 48, 6)
+            pygame.draw.rect(self.hud_surface, (36, 42, 54, 200), pbar_bg, border_radius=3)
+            fill_w = int((card_w - 48) * progress)
+            if fill_w > 0:
+                pbar_fill = pygame.Rect(card_x + 24, card_y + card_h - 18, fill_w, 6)
+                pygame.draw.rect(self.hud_surface, (245, 180, 40), pbar_fill, border_radius=3)
 
         # =====================================================================
         # 5. Composite 2D HUD Surface onto OpenGL Viewport
@@ -694,6 +839,16 @@ class Sim3DApp:
         running = True
 
         while running:
+            now_mono = time.monotonic()
+            dt = max(0.005, min(0.1, now_mono - self._last_physics_time))
+            self._last_physics_time = now_mono
+
+            # Calibration state machine transition
+            if self._is_calibrating and now_mono >= self._calibrating_until:
+                self._is_calibrating = False
+                self.zero_drone_position()
+                self.logger.log_event("OK", "IMU calibration routine complete on board! Position zeroed & tare captured.")
+
             # 1. Ingest new telemetry (only poll log file in mock mode; serial worker pushes directly)
             if self.mode == "mock":
                 self.buffer.poll_file(self.log_path)
@@ -702,6 +857,43 @@ class Sim3DApp:
                 self.target_roll = latest.roll
                 self.target_pitch = latest.pitch
                 self.target_yaw = latest.yaw
+
+                if id(latest) != self._last_ingested_id:
+                    sample_dt = (
+                        max(0.01, min(0.15, now_mono - self._last_sample_mono))
+                        if self._last_ingested_id is not None
+                        else 0.04
+                    )
+                    self._last_sample_mono = now_mono
+                    self._last_ingested_id = id(latest)
+
+                    if self.buffer.is_online() and not self._is_calibrating:
+                        self.pos_estimator.update(
+                            roll_deg=latest.roll,
+                            pitch_deg=latest.pitch,
+                            yaw_deg=latest.yaw,
+                            acc_x=latest.acc_x,
+                            acc_y=latest.acc_y,
+                            acc_z=latest.acc_z,
+                            dt=sample_dt
+                        )
+                        self.trail.add_point(*self.pos_estimator.pos, now=now_mono)
+                        diag = self.pos_estimator.get_diagnostics_state()
+                        self.logger.log_sample(
+                            dt=sample_dt,
+                            roll=latest.roll,
+                            pitch=latest.pitch,
+                            yaw=latest.yaw,
+                            acc_body=diag["body_acc"],
+                            acc_world_raw=diag["world_raw"],
+                            acc_world_bias=diag["world_bias"],
+                            lin_acc=diag["lin_acc"],
+                            vel=diag["vel"],
+                            pos=diag["pos"],
+                            deadband=diag["deadband"],
+                            clamped=diag["clamped"],
+                            zupt_active=diag.get("zupt_active", False),
+                        )
 
             # Smooth interpolation (0.25 factor for 60 FPS responsiveness)
             self.current_roll  += (self.target_roll  - self.current_roll)  * 0.25
@@ -721,6 +913,10 @@ class Sim3DApp:
                         running = False
                     elif event.key == K_h:
                         self.camera.reset_home()
+                    elif event.key == K_z:
+                        self.zero_drone_position()
+                    elif event.key == K_f:
+                        self.camera.follow_drone = not self.camera.follow_drone
                     elif event.key == K_s:
                         self.toggle_serial_connection()
                     elif event.key == K_r:
@@ -739,6 +935,10 @@ class Sim3DApp:
                         self.visibility.toggle("imu_axes")
                     elif event.key in (pygame.K_5, pygame.K_KP5):
                         self.visibility.toggle("grid")
+                    elif event.key in (pygame.K_6, pygame.K_KP6):
+                        self.visibility.toggle("trail")
+                    elif event.key in (pygame.K_7, pygame.K_KP7):
+                        self.visibility.toggle("ground_laser")
                 elif event.type == MOUSEBUTTONDOWN:
                     if event.button == 1:
                         mouse_pos = event.pos
@@ -755,8 +955,12 @@ class Sim3DApp:
                             self.toggle_serial_connection()
                         elif hasattr(self, "btn_home_rect") and self.btn_home_rect.collidepoint(mouse_pos):
                             self.camera.reset_home()
+                        elif hasattr(self, "btn_zero_rect") and self.btn_zero_rect.collidepoint(mouse_pos):
+                            self.zero_drone_position()
                         elif hasattr(self, "btn_cal_rect") and self.btn_cal_rect.collidepoint(mouse_pos):
                             self.recalibrate_imu()
+                        elif hasattr(self, "btn_cam_rect") and self.btn_cam_rect.collidepoint(mouse_pos):
+                            self.camera.follow_drone = not self.camera.follow_drone
                         elif hasattr(self, "btn_proj_rect") and self.btn_proj_rect.collidepoint(mouse_pos):
                             self.camera.is_isometric = not self.camera.is_isometric
                         elif hasattr(self, "btn_chat_rect") and self.btn_chat_rect.collidepoint(mouse_pos):
@@ -805,6 +1009,7 @@ class Sim3DApp:
             clock.tick(60)
 
         # Cleanup background worker & processes
+        self.logger.close()
         if self.serial_worker:
             self.serial_worker.stop()
         if self.mock_process:
@@ -856,12 +1061,48 @@ if __name__ == "__main__":
         default=DEFAULT_LOG_FILE,
         help=f"Target telemetry log path (default: {DEFAULT_LOG_FILE})"
     )
+    parser.add_argument(
+        "--accel-decimals",
+        type=int,
+        default=None,
+        help="Decimal places for acceleration rounding before integration (default: None = full precision)"
+    )
+    parser.add_argument(
+        "--deadband", "--accel-deadband",
+        type=float,
+        default=0.05,
+        help="Acceleration deadband threshold in g (default: 0.05g to reject MEMS noise)"
+    )
+    parser.add_argument(
+        "--int-method",
+        type=str,
+        choices=["base_euler", "trapezoidal", "zupt"],
+        default="base_euler",
+        help="Kinematic integration method: base_euler (default), trapezoidal, or zupt"
+    )
+    parser.add_argument(
+        "--no-zupt",
+        dest="zupt",
+        action="store_false",
+        default=True,
+        help="Disable Zero-Velocity Update (ZUPT) stationary velocity damping"
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable live per-sample verbose diagnostic logging to stdout & diagnostics file"
+    )
 
     args = parser.parse_args()
     app = Sim3DApp(
         mode=args.mode,
         port=args.port,
         baudrate=args.baud,
-        log_path=args.log
+        log_path=args.log,
+        accel_decimals=args.accel_decimals,
+        accel_deadband=args.deadband,
+        int_method=args.int_method,
+        zupt=args.zupt,
+        verbose=args.verbose,
     )
     app.run()

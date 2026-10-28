@@ -1,7 +1,7 @@
 # System Architecture (`system_architecture.md`)
 
 > **Reference Documentation — Spec-Driven Development (SDD)**  
-> **Version:** 0.4.0 · **Status:** Active · **Updated:** October 2026  
+> **Version:** 0.5.0 · **Status:** Active · **Updated:** October 2026  
 
 ---
 
@@ -237,8 +237,12 @@ Per Section 1 and Appendix B of `tutorial_programacao_drone_especializacao.pdf`,
    - All global variables from Appendix B (`acc_x`, `gyro_roll_input`, `angle_roll`, `angle_pitch`, etc.) and exact equations (Eq. 1–12) are preserved 100%, with pure mathematical functions decoupled into `code/include/imu_attitude.h` and shared directly with `odometry/tester.c` (`-I../code/include`).
 3. **Configurable IMU Axis Polarity (`code/include/drone_config.h`):**
    - `IMU_SIGN_X`, `IMU_SIGN_Y`, and `IMU_SIGN_Z` (default `+1`) allow instant axis inversion if the physical MPU-6050/6000 mounting on the frame differs from the body coordinate frame.
-4. **Decimated 25 Hz Telemetry & $4050\,\mu\text{s}$ Overrun Watchdog:**
-   - Serial operates at `57600` bps (`example_01.ino` default), with Serial Plotter printing decimated to 1-in-10 cycles ($25\text{ Hz}$) so UART transmission never blocks the $4000\,\mu\text{s}$ ($250\text{ Hz}$) integration loop. Exceeding $4050\,\mu\text{s}$ drives LED `D12` `HIGH`.
+4. **Decimated 25 Hz Telemetry, Phase Latching, and Built-in LED Heartbeat:**
+   - **Split 2-Tick Telemetry:** Serial operates at `57600` bps, decimated to 1-in-10 cycles ($25\text{ Hz}$). To guarantee the $4000\,\mu\text{s}$ integration budget never overruns, transmission is split across two ticks:
+     - **Tick 5 ($20\text{ ms}$):** Latch the 10-tick averaged acceleration vector (`snap_ax_g, snap_ay_g, snap_az_g`) and emit attitude angles (`Roll Pitch Yaw `). Latching at Tick 5 eliminates phase delay between attitude and acceleration.
+     - **Tick 10 ($40\text{ ms}$):** Emit the latched acceleration vector with 4 decimal places (`Ax Ay Az\n`), preserving the MPU-6050's full 16-bit resolution ($1/4096 \approx 0.00024g$).
+   - **Source Accelerometer Bias Calibration:** `calibrate_imu()` calculates `acc_bias[0..2]` directly on raw acceleration readings, guaranteeing stationary resting readings of $(0, 0, +4096\text{ LSB} = +1.00g)$ and eliminating attitude/acceleration offset mismatch.
+   - **Visual Heartbeat Indicator (Pin 13 / `LED_BUILTIN`):** A top-level variable `uint16_t led_toggle_interval = 10;` toggles the onboard LED state every 10 telemetry transmission cycles ($10 \times 40\text{ ms} = 400\text{ ms} = 1.25\text{ Hz}$), providing instant visual proof that the 250 Hz control loop and UART pipeline are executing. Overrunning $4050\,\mu\text{s}$ continues to trigger the `D12` hardware watchdog.
 
 ---
 
@@ -295,4 +299,26 @@ flowchart LR
   - **Tester Role:** Author Pytest suites (`test_telemetry_reader.py`, `test_drone_model.py`) defining failing verification contracts (RED).
   - **Builder Role:** Implement minimal production code to satisfy contracts (GREEN) and refactor.
 - **Isolated Environment:** Tests are executed via `pytest` inside an isolated `.venv` environment to guarantee repeatable, hermetic CI verification.
+
+### 8.3 Inertial Position Estimation, Zero-Velocity Update (ZUPT) & Noise Deadband
+Open-loop double integration of raw accelerometer readings ($\vec{p} = \iint \vec{a} \, dt^2$) inherently suffers from **Velocity Integration Runaway** in discrete systems:
+1. **The Kinematic Asymmetry Trap:** When moved by hand, acceleration is sharp ($+0.20g$), while braking upon resting is gentle ($-0.03g$). Without proper handling, deadband filtering clips the gentle braking lobe, leaving positive velocity trapped in the integrator. Under Newton's First Law in a digital integrator ($\vec{v}_k = \vec{v}_{k-1} + 0$), the model assumes the drone is cruising indefinitely in a vacuum!
+2. **Zero-Velocity Update (ZUPT):** `InertialPositionEstimator` (`odometry/drone_model.py`) tracks stationary samples. When world-frame acceleration remains within the deadband ($|a_w| < 0.05g$) for 3 or more consecutive samples (~120 ms), ZUPT detects physical rest and exponentially bleeds residual velocity to zero (`vx *= 0.6` until $|v| < 0.01\text{ m/s} \implies 0.00\text{ m/s}$).
+3. **Stationary Noise Deadband:** Configured to $0.05g$ by default (`--deadband 0.05`) to suppress MEMS thermal noise and quantization drift.
+4. **Unconstrained Floating-Point Precision:** Uses full float64 precision by default (`accel_decimals = None`), eliminating artificial discretization truncation while preserving configurable rounding for comparative testing.
+5. **3D Velocity HUD Card:** Displays 3D Position (`POS 3D (m)`), 3D Velocity (`VEL 3D (m/s)`), and Linear Acceleration (`LIN ACC (g)`) in the top-left odometry card.
+
+### 8.4 Dual-Tier Telemetry and Diagnostics Logging (`odometry/telemetry_logger.py`)
+Provides simultaneous stdout terminal logging with ANSI color coding and persistent file logging to `odometry/logs/sim_diagnostics.log`:
+- **Standard Mode (Default):** Emits lifecycle events (connection, calibration start/end, tare bias capture) and a periodic 1 Hz system health heartbeat summarizing attitude, acceleration, velocity, and position.
+- **Verbose Mode (`-v` / `--verbose`):** Emits a complete per-sample forensic breakdown at 25 Hz containing sample counter, inter-packet timing $\Delta t$, raw body acceleration, world-rotated acceleration, tare bias, deadband clamping status (`[CLAMP <0.05g]`), velocity, position, and ZUPT activation status (`[ZUPT ACTIVE]`).
+
+### 8.5 Operational Calibration State Machine & Warning Modal
+- When calibration is triggered via `R` or upon simulator launch, the HUD renders a prominent amber warning card:
+  - Header: `IMU CALIBRATION IN PROGRESS` with a live countdown timer (`3.0s remaining`).
+  - Primary Directive: `KEEP DRONE COMPLETELY MOTIONLESS`.
+  - Operational Subtext: `Keep device static on a flat surface without rotation or acceleration.`
+  - Bottom Progress Bar: Visual completion percentage indicator.
+- Kinematic integration is **100% paused** during the 3.0s calibration routine.
+- Upon completion, the simulator automatically zeroes 3D position and captures the newly calibrated resting acceleration as the world zero tare reference.
 

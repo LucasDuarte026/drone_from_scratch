@@ -33,9 +33,6 @@ odometry/logs/
 # Knowledge Graph (Graphify - Ephemeral AST Cache)
 graphify-out/
 
-# Spec-Driven Development (OpenSpec - Local Agent Workflow)
-openspec/
-
 # Local Agent Skills & Workspace Customizations
 .agents/
 .vscode/

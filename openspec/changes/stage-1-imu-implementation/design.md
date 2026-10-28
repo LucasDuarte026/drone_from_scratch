@@ -32,6 +32,9 @@
    - Axis sign constants (`IMU_SIGN_X`, `IMU_SIGN_Y`, `IMU_SIGN_Z`, defaulting to `+1`) are applied immediately after sensor reading to accommodate physical mounting inversions without altering kinematic equations.
 6. **Decimated 25 Hz Telemetry & Overrun Watchdog:**
    - Serial remains at `57600` bps (`example_01.ino` standard), but Serial Plotter output is decimated to every 10th loop iteration ($25\text{ Hz}$) to prevent 64-byte UART TX buffer stalls. If `micros() - loop_timer > 4050`, pin `D12` is driven `HIGH` to flag a real-time overrun.
+7. **Source-Calibrated Accelerometer Bias & Phase-Synchronized 10-Sample Averaging (`code/src/main.cpp`):**
+   - During `calibrate_imu()`, the firmware computes both stationary gyroscope biases (`gyro_axis_cal[0..2]`) and accelerometer biases (`acc_bias[0..2]`) so that the resting pose directly yields `acc_x = 0`, `acc_y = 0`, `acc_z = +4096 LSB` ($+1.00g$) and zero tilt angles (`Roll = 0.00°`, `Pitch = 0.00°`).
+   - Over each 10-sample decimation window ($250\text{ Hz} \to 25\text{ Hz}$), calibrated `acc_x, acc_y, acc_z` are accumulated (`acc_sum_x/y/z`); at Tick 5, the 10-sample boxcar average is latched into `snap_ax_g, snap_ay_g, snap_az_g` at the exact same instant `angle_roll, angle_pitch, angle_yaw` are transmitted, eliminating the 20 ms phase skew between attitude and acceleration while keeping per-tick UART formatting within the $4000\,\mu\text{s}$ loop budget.
 
 ## Resolved Questions (`/grill-me` Decisions)
 1. **Build & Tooling Ecosystem:** Resolved — Full PlatformIO project (`platformio.ini` + `code/src/` + `code/include/` + `test/`) managed via CLI.

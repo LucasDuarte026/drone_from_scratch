@@ -48,7 +48,18 @@ The system SHALL compute the Euler angle rates ($\dot{\phi}_{gyro}, \dot{\theta}
   $$\theta^{k+1}_{gyro} = \theta^k + (q^{k+1}\cos\phi^k - r^{k+1}\sin\phi^k)\,\Delta t$$
   $$\psi^{k+1}_{gyro} = \psi^k + (q^{k+1}\sin\phi^k\sec\theta^k + r^{k+1}\cos\phi^k\sec\theta^k)\,\Delta t$$
 
-### Requirement: Accelerometer Gravity Vector Attitude Estimation
+### Requirement: Accelerometer Source Bias Calibration and Phase-Synchronized Telemetry Output
+The system SHALL compute stationary accelerometer biases (`acc_bias[0..2]`) at the source during IMU calibration such that resting acceleration equals $(0, 0, +4096\text{ LSB} = +1.00g)$, accumulate accelerations across the 10-tick decimation window, latch the averaged values at Tick 5 concurrently with attitude angles, emit 4-decimal precision values (`Roll Pitch Yaw AccX AccY AccZ`) at 25 Hz, and toggle the onboard status LED (`PIN_LED_STATUS` / Pin 13) every `led_toggle_interval` telemetry cycles.
+
+#### Scenario: Source-calibrated resting acceleration
+- **GIVEN** the drone is stationary and level during `calibrate_imu()`
+- **WHEN** calibration finishes
+- **THEN** stationary body accelerations SHALL read $Acc_x = 0$, $Acc_y = 0$, and $Acc_z = +4096\text{ LSB}$ ($+1.00g$), aligning attitude angles ($\phi = 0^\circ, \theta = 0^\circ$) and acceleration vectors at the source.
+
+#### Scenario: Phase-synchronized 10-tick decimation and visual heartbeat
+- **GIVEN** the 250 Hz control loop executing with decimation factor 10
+- **WHEN** Tick 5 occurs
+- **THEN** the system SHALL latch the averaged acceleration across the decimation window and transmit attitude angles over serial, followed by the latched acceleration vector at Tick 10 with 4-decimal precision, and toggle the status LED state every `led_toggle_interval = 10` cycles ($1.25\text{ Hz}$ heartbeat).
 The system SHALL estimate low-frequency roll ($\phi_{acc}$) and pitch ($\theta_{acc}$) Euler angles from the 3-axis accelerometer projections relative to the total acceleration magnitude.
 
 #### Scenario: Stationary or quasi-static tilt estimation

@@ -177,3 +177,84 @@ def test_fading_trajectory_trail():
     assert len(trail.get_active_points(now=12.0)) == 0
 
 
+def test_inertial_estimator_decimals_and_saved_methods():
+    from pathlib import Path
+    from odometry.drone_model import InertialPositionEstimator
+    from odometry.telemetry_logger import TelemetryLogger
+
+    # 1. Default base_euler mode: accel_decimals=None (unfiltered), accel_deadband_g=0.05, vel_damping=1.0
+    est = InertialPositionEstimator(default_height=1.0)
+    assert est.accel_decimals is None
+    assert est.accel_deadband_g == pytest.approx(0.05)
+    assert est.vel_damping == pytest.approx(1.0)
+    assert est.method == "base_euler"
+
+    # Small stationary noise 0.024g is filtered by deadband (0.05g)
+    est.update(roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0, acc_x=0.024, acc_y=0.0, acc_z=1.0, dt=0.04)
+    assert est.lin_acc[0] == pytest.approx(0.0)
+    assert est.vel[0] == pytest.approx(0.0)
+    assert est.pos[0] == pytest.approx(0.0)
+    assert est.last_was_clamped is True
+
+    # Real movement above deadband (0.08g) integrates normally
+    est.update(roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0, acc_x=0.08, acc_y=0.0, acc_z=1.0, dt=0.04)
+    assert est.lin_acc[0] == pytest.approx(0.08)
+    assert est.vel[0] == pytest.approx(0.08 * 9.81 * 0.04)
+    assert est.pos[0] == pytest.approx(est.vel[0] * 0.04)
+
+    # Stationary ZUPT test: when motion stops (acc_x = 0), velocity decays to 0.0
+    for _ in range(8):
+        est.update(roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0, acc_x=0.0, acc_y=0.0, acc_z=1.0, dt=0.04)
+    assert est.vel[0] == pytest.approx(0.0)
+
+    # 2. Configurable precision (e.g., 3 decimals)
+    est3 = InertialPositionEstimator(default_height=1.0, accel_decimals=3, accel_deadband_g=0.0)
+    est3.update(roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0, acc_x=0.126, acc_y=0.0, acc_z=1.0, dt=0.04)
+    assert est3.lin_acc[0] == pytest.approx(0.126)
+
+    # 3. Saved evolutionary methods ('trapezoidal' and 'zupt')
+    est_trap = InertialPositionEstimator(default_height=1.0, method="trapezoidal", accel_deadband_g=0.0)
+    est_trap.update(0.0, 0.0, 0.0, acc_x=0.10, acc_y=0.0, acc_z=1.0, dt=0.04)
+    est_trap.update(0.0, 0.0, 0.0, acc_x=0.20, acc_y=0.0, acc_z=1.0, dt=0.04)
+    assert est_trap.vel[0] > 0.0
+
+    est_zupt = InertialPositionEstimator(
+        default_height=1.0, method="zupt", accel_deadband_g=0.04, vel_damping=0.95
+    )
+    est_zupt.update(0.0, 0.0, 0.0, acc_x=0.02, acc_y=0.0, acc_z=1.0, dt=0.04)
+    assert est_zupt.lin_acc[0] == pytest.approx(0.0)
+
+    # 4. Velocity line & CLI verbose flag displayed/supported in sim_3d.py
+    sim_src = (Path(__file__).resolve().parent.parent / "sim_3d.py").read_text(encoding="utf-8")
+    assert "VEL 3D" in sim_src
+    assert "--verbose" in sim_src
+    assert "--deadband" in sim_src
+    assert "IMU CALIBRATION IN PROGRESS" in sim_src
+    assert "KEEP DRONE COMPLETELY MOTIONLESS" in sim_src
+
+    # 5. Telemetry logger test (Standard and Verbose modes)
+    test_log_path = Path(__file__).resolve().parent.parent / "logs" / "test_diag.log"
+    logger = TelemetryLogger(verbose=True, log_file=str(test_log_path), enable_stdout=False)
+    logger.log_event("INFO", "Test event")
+    logger.log_sample(
+        dt=0.04,
+        roll=0.0, pitch=0.0, yaw=0.0,
+        acc_body=(0.0, 0.0, 1.0),
+        acc_world_raw=(0.0, 0.0, 0.0),
+        acc_world_bias=(0.0, 0.0, 0.0),
+        lin_acc=(0.0, 0.0, 0.0),
+        vel=(0.0, 0.0, 0.0),
+        pos=(0.0, 0.0, 1.0),
+        deadband=0.05,
+        clamped=True
+    )
+    logger.close()
+    assert test_log_path.exists()
+    content = test_log_path.read_text(encoding="utf-8")
+    assert "Test event" in content
+    assert "CLAMP" in content
+    test_log_path.unlink()
+
+
+
+
