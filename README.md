@@ -1,102 +1,175 @@
-# Arduino Quadcopter Flight Controller (`drone`) — Master SDD Guide
+# Autonomous Quadcopter Embedded Flight Controller & 3D Odometry Research
 
-> **Deterministic 250 Hz Embedded Flight Stabilization Platform**  
-> **Target MCU:** Arduino Uno (ATmega328P @ 16 MHz) · **IMU:** MPU-6050 / MPU-6000 (I2C 400 kHz) · **Methodology:** Spec-Driven Development (SDD)  
->
-> This repository is governed by **Bottom-Up Spec-Driven Development (SDD)** and **OpenSpec**. All documentation, mathematical models, and firmware modules are structured hierarchically from physical hardware constraints at the base up to closed-loop flight control and telemetry at the top.
+[![Language](https://img.shields.io/badge/Language-C%2B%2B%20%7C%20Python%20%7C%20C-blue.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-Arduino%20Uno%20(ATmega328P)-orange.svg)](https://www.arduino.cc/)
+[![Build System](https://img.shields.io/badge/Toolchain-PlatformIO%20%2B%20Pytest-green.svg)](https://platformio.org/)
+[![Institution](https://img.shields.io/badge/Institution-EESC--USP-blueviolet.svg)](https://eesc.usp.br/)
+[![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
+
+> **Academic Coursework:** SAA0356 - Sistemas Embarcados para Veículos Aéreos (Turma 201)  
+> **Institution:** Escola de Engenharia de São Carlos, Universidade de São Paulo (EESC - USP)  
+> **Faculty Advisor:** [Prof. Dr. Glauco Augusto de Paula Caurin](https://saa.eesc.usp.br/inicial/docentes/professor-glauco-augusto-de-paula-caurin/) · [CNPq Lattes](https://buscatextual.cnpq.br/buscatextual/visualizacv.do;jsessionid=5DDECA9F6260EAC787DD75C20FAF833C.buscatextual_0)  
+> **Authors / Development Team:** David Santiago Correa González, Juan Pablo Solano Mesa, Diego Alonso, Lucas Duarte  
 
 ---
 
-## 🌎 Bottom-Up SDD Documentation Index
+## 1. System Overview & Evolutionary Architecture
 
-To understand the platform or modify a requirement, navigate the architecture **from bottom to top (from physical hardware to flight control)**:
+This repository hosts the autonomous quadcopter embedded flight control and inertial navigation systems developed for course SAA0356 at EESC-USP. The codebase reflects two complementary, phased engineering projects:
 
 ```mermaid
-flowchart BT
-    L1["1. Physical Hardware & Wiring (ATmega328P, MPU-6050/6000, ESCs, RC, LiPo)"]
-    L2["2. Hardware Abstraction Layer - HAL (400kHz I2C, PCINT0..3, PORTD, EEPROM, ADC)"]
-    L3["3. Signal Processing & Attitude Estimation (IIR Filter, Euler Kinematics, Accel Tilt, Complementary Filter)"]
-    L4["4. Flight Control & Safety State Machine (Arm/Disarm, Stick Normalization, 3-Axis Rate/Angle PID)"]
-    L5["5. Telemetry & Verification Interface (Serial Plotter, LED Diagnostics, Bench Test Harnesses)"]
-
-    L1 --> L2 --> L3 --> L4 --> L5
-```
-
-| Layer | System Domain | Specification & Documentation (Direct Link) | Primary Scope |
-| :---: | :--- | :--- | :--- |
-| **Manifest** | **Project Identity** | 📄 **[PROJECT.md](PROJECT.md)** | Maestro Level 1 manifest, domain tags, and phased overview. |
-| **General** | **Docs Hub Index** | 📂 **[docs/README.md](docs/README.md)** | Guide to human and AI agent documentation governance. |
-| **General** | **System Purpose** | 📄 **[docs/system_purpose.md](docs/system_purpose.md)** | Objectives, 4-stage incremental roadmap, actors, and safety boundaries. |
-| **General** | **System Architecture** | 📄 **[docs/system_architecture.md](docs/system_architecture.md)** | Bottom-Up 5-layer architecture, pinout, math equations, Appendix B globals, and prototype audit. |
-| **Stage 1** | **IMU Attitude Spec** | 📜 **[openspec/specs/stage-1-imu-attitude/spec.md](openspec/specs/stage-1-imu-attitude/spec.md)** | Normative EARS requirements for MPU-6050/6000 setup, calibration, and complementary filter. |
-| **Stage 2** | **RC Receiver Spec** | 📜 **[openspec/specs/stage-2-rc-receiver/spec.md](openspec/specs/stage-2-rc-receiver/spec.md)** | Planned requirements for `PCINT0..3` PWM capture, EEPROM bounds, and stick normalization *(Open)*. |
-| **Stage 3/4** | **Motor & PID Spec** | 📜 **[openspec/specs/stage-3-motor-control/spec.md](openspec/specs/stage-3-motor-control/spec.md)** | Planned requirements for motor testing, arm/disarm state machine, PID, and `PORTD` pulses *(Open)*. |
-| **Base** | **Reference Material** | 📁 **[ref/DRONE_materialdeapoio/](ref/DRONE_materialdeapoio/)** | Original EESC-USP guide PDF, MPU-6000 datasheets, YMFC schematic, and `example_01.ino` prototype. |
-| **Firmware** | **Embedded C/C++ Code** | 📂 **[code/](code/)** | PlatformIO firmware sources (`code/src/main.cpp`) and headers (`code/include/`). |
-
----
-
-## 🚦 Phased Development Status
-
-| Stage | Milestone | Status | Key Deliverables |
-| :---: | :--- | :---: | :--- |
-| **Stage 1** | **Aircraft Attitude Determination (IMU)** | 🟡 **In Progress** | I2C 400 kHz driver, 2000-sample gyro calibration, $0.7/0.3$ digital filter, Euler kinematics, $0.9996/0.0004$ complementary filter, `example_01.ino` bug remediation. |
-| **Stage 2** | **RC Receiver PWM & EEPROM Calibration** | ⚪ **Open** | `ISR(PCINT0_vect)` on `D8`–`D11`, EEPROM address map (`0`–`23`), linear normalization ($1000\text{–}2000\,\mu\text{s}$). |
-| **Stage 3** | **Motor Testing & Arm/Disarm Logic** | ⚪ **Open** | Individual/all motor bench test (`1`–`5`), `start` state machine (`0, 1, 2`) via `THRO` + `RUDD`. |
-| **Stage 4** | **PID Flight Stabilization & Battery Comp.** | ⚪ **Open** | 3-axis PID controller, $\pm 8\,\mu\text{s}$ deadband, `A0` battery sensing & sag compensation, synchronous 250 Hz `PORTD` ESC pulse generation. |
-
----
-
-## 🧪 SDD & Dual-Role TDD Governance Matrix
-
-All development across the `drone` project MUST strictly conform to **Spec-Driven Development (SDD)** and **Dual-Role Test-Driven Development (TDD)**:
-
-```mermaid
-flowchart LR
-    subgraph SDD ["1. Spec-Driven Development (OpenSpec)"]
-        SpecMatrix["Specification Matrix (EARS + GIVEN/WHEN/THEN)"]
-        DesignTasks["Technical Design & Atomic Tasks"]
-        SpecMatrix --> DesignTasks
+flowchart TD
+    subgraph P1 ["Project 1: Physical Hardware Integration Bench (Complete System Loop)"]
+        P1_Tx["Handheld Wireless Remote (Arduino 2 + Potentiometer)"]
+        P1_RF["HC-12 433 MHz RF Wireless Link"]
+        P1_Rx["Flight Bench Controller (Arduino 1 + MPU-6050 @ 250Hz)"]
+        P1_Act["Active Tilt Compensation (4x 28BYJ-48 Steppers + ULN2003)"]
+        P1_Sim["Real-Time 3D Visualizer & HUD (envioadron.py)"]
+        
+        P1_Tx -->|RF Serial Command| P1_RF
+        P1_RF -->|UART RX| P1_Rx
+        P1_Rx -->|Step Pulses| P1_Act
+        P1_Rx -->|25 Hz Telemetry| P1_Sim
     end
 
-    subgraph TDD ["2. Dual-Role TDD Cycle (Pytest + .venv)"]
-        AgentTester["Agent Role: Tester / Spec Certifier (Author Failing Tests - RED)"]
-        AgentBuilder["Agent Role: Builder (Minimal Passing Implementation - GREEN)"]
-        Refactor["Refactor & Verification"]
-        AgentTester --> AgentBuilder --> Refactor --> AgentTester
+    subgraph P2 ["Project 2: Firmware Architecture & Odometry Research (Lucas Duarte)"]
+        P2_FW["PlatformIO Modular Firmware (code/src/main.cpp)"]
+        P2_HAL["Fast Mode 400kHz I2C + Split 2-Tick Telemetry (57600 bps)"]
+        P2_Watch["4050 us Overrun Watchdog (D12) + Pin 13 Visual Heartbeat"]
+        P2_Test["Automated Verification Harness (Pytest 22/22 Tests + C Driver Tester)"]
+        P2_Odom["Inertial Odometry Research (Euler, Trapezoidal, ZUPT, 0.05g Deadband)"]
+        P2_Sim["PyOpenGL 3D Flight Simulator (odometry/sim_3d.py)"]
+        
+        P2_FW --> P2_HAL --> P2_Watch
+        P2_FW --> P2_Test
+        P2_FW --> P2_Odom --> P2_Sim
     end
-
-    DesignTasks --> AgentTester
 ```
 
-1. **Specification Before Code:** Every feature or driver must possess a formal OpenSpec matrix under `openspec/changes/` before implementation begins.
-2. **Dual-Role Separation:** A dedicated testing role crafts the test suite in Python (`pytest`) asserting against the exact scenario constraints. The builder role subsequently writes minimal production code to satisfy the tests.
-3. **Controlled Python Test Harness:** High-control test suites run in isolated Python virtual environments (`.venv`), providing end-to-end certification of mathematical filters, communication buffers, and telemetry decoders.
-4. **Live Odometry & Inspection Platform (`odometry/`):** A dedicated real-time 3D telemetry visualization and C driver tester environment allows on-the-fly verification and dimensional validation of attitude math and hardware signals.
+### 1.1 Project Synergy: Hardware Integration vs. Theoretical Rigor
+- **[Project 1 (`project_1/`)](project_1/README.md) — Complete Physical Test Bench:**  
+  Delivers the full physical hardware realization. Developed collaboratively by the team, Project 1 closes the entire physical loop: reading an MPU-6050 over I2C, receiving wireless motor commands from a handheld remote over HC-12 433 MHz RF, computing proportional tilt compensation, driving four 28BYJ-48 stepper motors with ULN2003 Darlington arrays, and streaming real-time orientation to a Pygame/PyOpenGL 3D visualizer. Project 1 audits and corrects all hardware and memory defects present in the reference course prototype (`example_01.ino`).
+
+- **[Project 2 (`project_2/`)](project_2/README.md) — Modular Architecture & Inertial Odometry Research:**  
+  Authored individually by Lucas Duarte, Project 2 establishes a production-grade firmware architecture and rigorous mathematical investigation governed by **Spec-Driven Development (SDD)** and **Test-Driven Development (TDD)**. It features an isolated PlatformIO toolchain, deterministic $4000\,\mu\text{s}$ timing with hardware overrun watchdogs, 2-tick serial telemetry, and 22 automated Pytest unit tests. Critically, Project 2 conducts a formal study on inertial dead-reckoning (ZUPT, deadband, quadratic integration drift $\iint a\,dt^2$), demonstrating why standalone IMU integration diverges over time and establishing the mathematical requirement for multi-sensor Kalman filtering.
 
 ---
 
-## ⚙️ Bottom-Up Spec Propagation Rules
+## 2. Cross-Project Technical Comparison
+
+| Dimension | Project 1: Physical Bench Prototype | Project 2: Firmware Architecture & Odometry |
+| :--- | :--- | :--- |
+| **Primary Scope** | Full physical bench implementation (hardware-in-the-loop). | Architecture, timing determinism, and odometry research. |
+| **Authorship** | David González, Juan Pablo Mesa, Diego Alonso, Lucas Duarte. | Lucas Duarte. |
+| **Build System** | Arduino IDE / PlatformIO compatible (`.ino`). | PlatformIO CLI with isolated environments (`platformio.ini`). |
+| **Microcontroller** | Dual ATmega328P (Flight Controller + Remote Controller). | ATmega328P @ 16 MHz (Arduino Uno / Nano). |
+| **Control Loop Timing** | $4000\,\mu\text{s}$ ($250\text{ Hz}$) loop with non-blocking stepper scheduler. | Strict $4000\,\mu\text{s}$ ($250\text{ Hz}$) loop with $4050\,\mu\text{s}$ D12 watchdog. |
+| **Actuators** | 4x 28BYJ-48 unipolar steppers + ULN2003 drivers. | Spec-driven ESC pulse generator roadmap (`PORTD` D4–D7). |
+| **Wireless RF Link** | HC-12 433 MHz UART transceiver (`SoftwareSerial`). | Serial telemetry with phase-latched 2-tick transmission. |
+| **Motor Control Law** | Proportional differential tilt reaction ($k = 2.0$). | Cascaded rate/angle PID specifications with EEPROM calibration. |
+| **Telemetry Streaming** | ASCII stream at 25 Hz ($115{,}200\text{ bps}$). | Split 2-tick decimated stream at 25 Hz ($57{,}600\text{ bps}$). |
+| **Inertial Odometry** | Earth-frame gravity rotation and leaky vertical displacement. | Formal evaluation of Euler vs. Trapezoidal vs. ZUPT with $0.05g$ deadband. |
+| **Automated Testing** | Visual validation on bench and PyOpenGL visualizer. | 22/22 passing automated Pytest tests + host C driver tester. |
+| **Documentation Link** | 📖 **[project_1/README.md](project_1/README.md)** | 📖 **[project_2/README.md](project_2/README.md)** |
+
+---
+
+## 3. Featured Multimedia Demonstrations
+
+### 3.1 Project 1: Physical Bench Video Demonstration
+The physical test bench, dual-Arduino wireless RF link, and active stepper tilt compensation were recorded during laboratory testing:
+
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=eWvYoFlVz2w" target="_blank">
+    <img src="https://img.youtube.com/vi/eWvYoFlVz2w/maxresdefault.jpg" alt="Quadcopter Test Bench Video Demonstration" style="width: 80%; max-width: 720px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+  </a>
+  <p><em>Click the image above to view the demonstration on YouTube: <a href="https://www.youtube.com/watch?v=eWvYoFlVz2w">https://www.youtube.com/watch?v=eWvYoFlVz2w</a></em></p>
+</div>
+
+**Demonstration Key Moments (from `project_1/transcribe.txt`):**
+1. **Wireless Remote Operation:** Demonstration of the handheld Arduino remote transmitting throttle commands via HC-12 radiofrequency.
+2. **Pitch Axis Compensation:** Manually tilting the platform forward accelerates the front stepper motors to counteract the tilt; tilting backward accelerates the rear motors.
+3. **Roll Axis Compensation:** Tilting left or right activates the corresponding motor pairs to level the airframe.
+4. **3D Telemetry Synchronization:** The Pygame/PyOpenGL 3D visualizer mirrors bench attitude in real time.
+
+### 3.2 Project 2: 3D Odometry & Inertial Simulation Video
+<div align="center">
+  <div style="background: #18191c; padding: 24px; border-radius: 8px; border: 1px solid #333; margin: 16px 0;">
+    <p style="color: #888; font-family: monospace; margin: 0 0 12px 0;">[ Project 2 3D Odometry Simulation Video Placeholder ]</p>
+    <p style="color: #ccc; font-size: 0.95em; line-height: 1.5; margin: 0;">
+      A dedicated video recording demonstrating Project 2's PyOpenGL 3D flight simulator, real-time MPU-6050 serial tracking, ZUPT stationary deadband behavior, and verbose diagnostics will be added here in the next iteration.
+    </p>
+  </div>
+</div>
+
+---
+
+## 4. Repository Structure & Living Documentation
+
+```
+projects/drone/
+├── README.md                                 # Root Entry Point & Academic Dashboard
+├── PROJECT.md                                # Workspace Manifest
+├── docs/                                     # Global Architecture & Governance
+│   └── KNOWLEDGE_GAPS_REPORT.md              # Action Report: Missing Datasheets & Assets
+├── openspec/                                 # Root OpenSpec (Ephemeral Development Harness)
+│   ├── config.yaml
+│   └── changes/global-documentation-release/ # Global Documentation Delta Specs
+├── project_1/                                # Physical Quadcopter Test Bench
+│   ├── README.md                             # Subsystem Specification & Wiring Guide
+│   ├── arduino1dron.ino                      # Flight controller & stepper motor firmware
+│   ├── arduino2control.ino                   # Remote control RF transmitter firmware
+│   ├── envioadron.py                         # Pygame + PyOpenGL 3D ground station
+│   ├── transcribe.txt                        # Audio transcript of physical bench video
+│   ├── images/                               # Hardware photographs and wiring diagrams
+│   │   ├── platform.jpeg                     # Assembled physical bench photo
+│   │   └── exploded_hardware_connections.jpeg # Wiring schematic diagram
+│   └── openspec/                             # Project 1 Ephemeral OpenSpec Harness
+└── project_2/                                # Production Firmware & Odometry Research
+    ├── README.md                             # Subsystem Technical Guide & Odometry Analysis
+    ├── VERSION                               # Semantic Version (0.5.0)
+    ├── platformio.ini                        # PlatformIO multi-environment configuration
+    ├── code/                                 # Embedded C/C++ firmware
+    │   ├── include/drone_config.h            # Timing, pinout, and filter constants
+    │   ├── include/imu_attitude.h            # Single-source pure C kinematic math routines
+    │   ├── src/main.cpp                      # Deterministic 250 Hz flight controller
+    │   └── src/i2c_finder.cpp                # 100 kHz I2C scanner & pull-up diagnostic
+    ├── odometry/                             # 3D Simulation & Verification Engine
+    │   ├── sim_3d.py                         # PyOpenGL flight simulator with ZUPT
+    │   ├── drone_model.py                    # 3D geometry & InertialPositionEstimator
+    │   ├── telemetry_reader.py               # Serial reader & circular buffer
+    │   ├── telemetry_logger.py               # Dual-tier telemetry & diagnostics logger
+    │   ├── tester.c                          # Standalone C driver tester
+    │   └── tests/                            # Automated Pytest suite (22 unit tests)
+    ├── docs/                                 # Subsystem Architecture & ADR Records
+    │   ├── system_architecture.md            # Bottom-Up 5-layer hardware & register maps
+    │   ├── system_purpose.md                 # 4-stage incremental roadmap
+    │   ├── CHANGELOG.md                      # Chronological version history
+    │   └── adr/                              # Architectural Decision Records (ADR 1–4)
+    ├── images/sim_3d_visualizer/             # Simulator screenshot gallery (placeholders)
+    └── openspec/                             # Project 2 Ephemeral OpenSpec Harness
+```
+
+---
+
+## 5. Quick Operational Command Table
+
+All commands below are verified to execute cleanly in the Linux workspace:
+
+| Target Subsystem | Action | Verified Command | Operational Purpose |
+| :--- | :--- | :--- | :--- |
+| **Project 2** | **Run All Unit Tests** | `cd project_2 && .venv/bin/pytest odometry/tests/ -v` | Runs 22 unit tests in ~0.20s (Validates kinematics, ZUPT, and buffers) |
+| **Project 2** | **Compile Firmware** | `cd project_2 && pio run -e uno` | Builds `code/src/main.cpp` using Atmel AVR toolchain |
+| **Project 2** | **Flash Arduino** | `cd project_2 && pio run -e uno -t upload` | Flashes ATmega328P flight controller via `/dev/ttyUSB1` |
+| **Project 2** | **Launch 3D Simulator** | `cd project_2 && .venv/bin/python odometry/sim_3d.py --port /dev/ttyUSB1` | Starts real-time 3D simulator reading live MPU-6050 telemetry |
+| **Project 2** | **Verbose Diagnostics** | `cd project_2 && .venv/bin/python odometry/sim_3d.py --port /dev/ttyUSB1 -v` | Streams per-frame math, clamp states, and ZUPT tags |
+| **Project 1** | **Launch Ground Station**| `cd project_1 && python3 envioadron.py --port /dev/ttyUSB0 --baud 115200` | Starts Pygame/PyOpenGL visualizer reading Project 1 RF telemetry |
+| **Workspace** | **Update Knowledge Graph**| `graphify update .` | Synchronizes GraphRAG knowledge graph without API token consumption |
+
+---
+
+## 6. OpenSpec Ephemeral Lifecycle Governance
 
 > [!IMPORTANT]
-> **Strict Bottom-Up Modification Flow:**  
-> Any hardware or mathematical change must propagate from the base layer upward:
-> 1. **Layer 1 (Hardware & Pinout):** Document physical wiring, sensor orientation, or voltage divider changes in [docs/system_architecture.md](docs/system_architecture.md).
-> 2. **Layer 2 (HAL & Registers):** Update register configurations (`0x6B`, `0x1B`, `0x1C`, `0x1A`), ISR masks, or EEPROM layout in the corresponding OpenSpec specification under [openspec/specs/](openspec/specs/).
-> 3. **Layer 3 & 4 (Math & Control):** Verify that all trigonometric, filtering, and PID computations execute strictly within the $4000\,\mu\text{s}$ ($250\text{ Hz}$) real-time loop window.
-> 4. **Verification & Testing (TDD & Odometry):** Write and execute automated Pytest suites and validate attitude stability using the real-time 3D simulation in [odometry/](odometry/).
-> 5. **Layer 5 (Knowledge Graph & Changelog):** Update [docs/CHANGELOG.md](docs/CHANGELOG.md) and run `graphify update .` to keep the knowledge graph synchronized.
-
----
-
-## 🚀 Quick Operational Commands (`.venv` & PlatformIO)
-
-| Target Task | Command | Operational Notes |
-| :--- | :--- | :--- |
-| **Compile Firmware** | `pio run -e uno` | Compiles `code/src/main.cpp` using Atmel AVR toolchain. |
-| **Flash Arduino Uno** | `pio run -e uno -t upload` | Flashes ATmega328P via active serial port (`/dev/ttyUSB1`). |
-| **Launch 3D Simulator (Standard)** | `.venv/bin/python3 odometry/sim_3d.py` | Runs real-time 3D simulation with ZUPT, $0.05g$ deadband, and 1 Hz heartbeat. |
-| **Launch 3D Simulator (Verbose)** | `.venv/bin/python3 odometry/sim_3d.py -v` | Emits per-sample diagnostics with $\Delta t$, clamping tags, and ZUPT tags. |
-| **Run Full TDD Test Suite** | `.venv/bin/pytest odometry/tests/` | Runs all 22 automated Pytest unit and integration tests. |
-| **Compile C Driver Tester** | `make -C odometry` | Builds `odometry/tester` using host GCC. |
-
+> **Internal Development Policy:**  
+> All `openspec/` directories within this repository (`openspec/`, `project_1/openspec/`, and `project_2/openspec/`) represent internal Spec-Driven Development contracts used to govern atomic tasks, design trade-offs, and verification criteria. Prior to any final public open-source Git tag release, these internal specification folders will be omitted from the packaging manifest, leaving the root `README.md`, subsystem READMEs, and the comprehensive `docs/` directories as the sole living technical documentation.

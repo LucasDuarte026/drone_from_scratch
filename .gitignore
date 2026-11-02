@@ -17,10 +17,8 @@ build/
 compile_commands.json
 
 # Editor & IDE (VSCode / C/C++ Intellisense)
-.vscode/.browse.c_cpp.db*
-.vscode/c_cpp_properties.json
-.vscode/launch.json
-.vscode/ipch/
+.vscode/
+.idea/
 
 # Simulation, Odometry & Hardware Telemetry Logs / Binaries
 odometry/tester
@@ -33,6 +31,5 @@ odometry/logs/
 # Knowledge Graph (Graphify - Ephemeral AST Cache)
 graphify-out/
 
-# Local Agent Skills & Workspace Customizations
+# Local Agent Governance & Skills
 .agents/
-.vscode/

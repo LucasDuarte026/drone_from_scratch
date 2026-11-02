@@ -1,0 +1,8 @@
+schema: spec-driven
+
+context: |
+  Project: Arduino Quadcopter Flight Controller (drone)
+  Language: en
+  All OpenSpec artifacts, specifications, and architectural documents must be written in English (Rule 7).
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+  Follow Bottom-Up Spec-Driven Development (SDD): physical hardware and timing constraints (250 Hz / 4000 us loop) govern HAL, signal processing, and control layers.

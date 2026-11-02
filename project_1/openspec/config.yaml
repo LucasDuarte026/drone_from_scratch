@@ -1,0 +1,12 @@
+# OpenSpec Subsystem Configuration (Project 1: Hardware Bench Integration)
+schema: 1
+project_name: "drone-project-1"
+version: "1.0.0"
+spec_directory: "specs"
+changes_directory: "changes"
+profile: "core"
+rules:
+  normative_language: true
+  scenarios_required: true
+  ephemeral_governance: true
+  ephemeral_note: "OpenSpec artifacts are internal development harnesses only. All openspec/ folders must be excluded prior to the final public open-source Git tag release, with permanent documentation retained exclusively under docs/ and README.md files."

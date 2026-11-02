@@ -1,74 +1,50 @@
-# 🚁 Project Manifest: Arduino Quadcopter Flight Controller (`drone`)
+# 🚁 Project Manifest: Drone Subsystem Workspace (`projects/drone`)
 
-Standard interface manifest for the `drone` autonomous sub-project within the Maestro ecosystem.
+Standard Level 1 interface manifest for the `drone` autonomous workspace within the Maestro ecosystem, complying with Maestro's `my_auto_document` (The Scribe) standard.
 
 ---
 
 ## 📌 Project Identity & Metadata
 
-- **Project Name:** Arduino Quadcopter Flight Controller (`drone`)
-- **Directory:** `projects/drone/`
-- **Domain Tags:** `#drone` `#quadcopter` `#arduino` `#atmega328p` `#mpu6050` `#mpu6000` `#imu` `#pid-control` `#embedded-c`
-- **Status:** Active (Stage 1: IMU Attitude Determination in Progress)
-- **Version Control Scope:** Independent repository / sub-project with encapsulated embedded firmware in `code/` (`code/src/`, `code/include/`), and isolated `docs/`, `openspec/`, `odometry/`, `ref/`, and `graphify-out/`.
+- **Workspace Path:** `projects/drone/`
+- **Domain Tags:** `#drone` `#flight-controller` `#embedded-c` `#odometry` `#zupt` `#mpu6050` `#simulation` `#sdd`
+- **Status:** Active (Stage 1 IMU Attitude & 3D Inertial Odometry v0.5.0)
+- **Primary Orchestrator Integration:** Registered in Maestro Federated Master Index (`00_MAESTRO_INDEX.md`).
 
 ---
 
-## 🎯 Purpose & Phased Roadmap
+## 📂 Sub-Project Topology
 
-The **Arduino Quadcopter Flight Controller (`drone`)** repository develops a deterministic, 250 Hz ($4000\,\mu\text{s}$ loop) flight stabilization system on the Arduino Uno (ATmega328P), structured around the EESC-USP specialization guide (*Angélico, Daud Filho, Bidinotto, July 2025*) and the YMFC-3D/AL hardware schematic:
+The `drone` workspace contains two distinct architectural sub-systems:
 
-1. **Stage 1 — Aircraft Attitude Determination (IMU) [ACTIVE]:**
-   - 400 kHz I2C register setup and verification for MPU-6050 / MPU-6000 (`0x68`).
-   - 2000-sample stationary gyroscope bias calibration (`gyro_axis_cal`).
-   - First-order IIR digital low-pass filter on angular rates ($p, q, r$): $0.7 / 0.3$.
-   - Euler angle kinematic rate transformation and numerical integration ($\Delta t = 0.004\text{ s}$).
-   - 3-axis accelerometer gravity vector projection ($\phi_{acc}, \theta_{acc}$).
-   - Complementary filter sensor fusion ($\alpha = 0.9996$, $1 - \alpha = 0.0004$) and Serial Plotter verification.
-2. **Stage 2 — RC Receiver PWM Capture & EEPROM Calibration [OPEN / DEFERRED]:**
-   - Pin Change Interrupts (`PCINT0..3` on `D8`–`D11`) for 4-channel radio pulse width capture (`THRO`, `AILE`, `ELEV`, `RUDD`).
-   - Interactive stick limit/center calibration persisted in EEPROM (addresses `0`–`23`) and linear normalization ($1000\text{–}2000\,\mu\text{s}$).
-3. **Stage 3 — Motor Testing & Arm/Disarm State Machine [OPEN / DEFERRED]:**
-   - EEPROM verification on startup and individual/simultaneous motor test routines (`1`–`5`: FR, RR, RL, FL, ALL).
-   - Left-stick (`THRO` + `RUDD`) safety arming/disarming state machine (`start = 0, 1, 2`).
-4. **Stage 4 — PID Flight Stabilization & Battery Compensation [OPEN / DEFERRED]:**
-   - Cascaded attitude-to-rate setpoint conversion ($\pm 8\,\mu\text{s}$ deadband, max tilt $32.8^\circ$, max rate $164^\circ/\text{s}$) and 3-axis PID controller with $\pm 400\,\mu\text{s}$ integral/output saturation.
-   - 3S LiPo battery voltage monitoring on `A0` with diode drop compensation, $0.92 / 0.08$ digital filter, low-voltage warning (`D12` LED at $< 10.0\text{ V}$), and ESC pulse thrust compensation.
-   - Synchronous 250 Hz hardware-timed pulse generation on `PORTD` (`D4`–`D7`).
+```mermaid
+flowchart TD
+    DroneRoot["projects/drone/"] --> P1["project_1/ (Historical Embedded Prototype)"]
+    DroneRoot --> P2["project_2/ (Production SDD Flight & Odometry Platform)"]
 
----
+    P1 --> P1_Firmware["arduino1dron.ino & arduino2control.ino"]
+    P1 --> P1_Telemetry["envioadron.py (RF/Serial Telemetry)"]
+    P1 --> P1_Ref["Hardware Photos & Transcript"]
 
-## 📐 Spec-Driven Development (SDD) & Dual-Role TDD Governance
+    P2 --> P2_Firmware["code/ (ATmega328P C++ PlatformIO 250 Hz Loop)"]
+    P2 --> P2_Odometry["odometry/ (PyOpenGL 3D Sim, ZUPT, TelemetryLogger)"]
+    P2 --> P2_SDD["openspec/ & docs/ (ADRs, Specifications, Changelog)"]
+```
 
-This project is governed by strict **Spec-Driven Development (SDD)** with OpenSpec and **Test-Driven Development (TDD)** using an isolated Python/Pytest test stack:
-
-1. **Matrix Specification Prerequisite (SDD First):**
-   - No production code (C or Python) SHALL ever be written without a prior normative specification matrix (`proposal.md`, `specs/*.md` with EARS & `GIVEN / WHEN / THEN`, `design.md`, `tasks.md`) under `openspec/`.
-2. **Dual-Role Builder/Tester Discipline (Strict TDD):**
-   - Distinct roles are maintained: one role designs and authors rigorous failing test harnesses (RED), and another implements the minimal production code to pass (GREEN), followed by clean refactoring.
-3. **Automated Python Test Stack:**
-   - Every hardware driver, kinematic algorithm, telemetry pipeline, and mathematical transformation is mapped to automated, deterministic tests in Python (`pytest` inside an isolated `.venv`).
-4. **Odometry & Real-Time 3D Simulation Subsystem (`odometry/`):**
-   - Real-time 3D telemetry visualization (Pygame + PyOpenGL) consuming a 10-position FIFO buffer from `odometry/logs/telemetry.log` or direct USB serial (`SerialTelemetryWorker`), fed by an IMU C driver tester (`odometry/tester.c`) for continuous live inspection and dimensioning validation.
-5. **Mandatory English-Only Standard (UI, Code & Docs):**
-   - All project documentation, OpenSpec specifications, firmware logs, and simulator GUI elements (`odometry/sim_3d.py`) are standardized in **English by default** and verified by automated unit tests (`test_english_only_ui_labels`).
+| Sub-Project | Primary Purpose | Tech Stack | Status | Documentation |
+| :--- | :--- | :--- | :---: | :--- |
+| **`project_1/`** | **Embedded Drone Prototype & RF Controller.** Historical hardware prototype demonstrating 4-motor tilt stabilization, dual Arduino transceivers (RF communication), and Python telemetry. | Arduino C (`.ino`), Python serial, RF module | Historical Reference | [project_1/README.md](project_1/README.md) |
+| **`project_2/`** | **Production SDD Flight Controller & 3D Odometry.** Production-grade 250 Hz deterministic flight controller firmware, 25 Hz decimated UART telemetry, 6-DoF inertial odometry with ZUPT, dual-tier telemetry logger, and 3D visualizer. | PlatformIO, C++, Python 3.12, Pygame, PyOpenGL, Pytest | Active (v0.5.0) | [project_2/README.md](project_2/README.md) · [project_2/PROJECT.md](project_2/PROJECT.md) |
 
 ---
 
-## 📐 Spec-Driven Development (SDD) & OpenSpec Integration
+## 🏛️ Maestro Documentation & SDD Standards
 
-- **Human & Agent SDD Hub:** [docs/README.md](docs/README.md)
-- **System Purpose & Roadmap:** [docs/system_purpose.md](docs/system_purpose.md)
-- **Bottom-Up System Architecture:** [docs/system_architecture.md](docs/system_architecture.md)
-- **Canonical OpenSpec Specifications:** [openspec/specs/](openspec/specs/)
-- **Active OpenSpec Changes:**
-  - Stage 1 IMU Firmware: [openspec/changes/stage-1-imu-implementation/](openspec/changes/stage-1-imu-implementation/)
-  - Odometry 3D Simulation & Tester: [openspec/changes/odometry-3d-simulation/](openspec/changes/odometry-3d-simulation/)
-
----
-
-## 🔄 Graphify Integration
-
-- **Local AST & Semantic Graph:** [graphify-out/graph.json](graphify-out/graph.json)
-- **Audit Report:** [graphify-out/GRAPH_REPORT.md](graphify-out/GRAPH_REPORT.md)
-
+This workspace adheres strictly to Maestro's **Zero Doc-Drift & 7 Golden Gates** (`my_auto_document`):
+1. **Gate 1 (Executable Verification):** All CLI scripts and pytest suites execute inside `project_2/.venv`.
+2. **Gate 2 (Lightweight ADRs):** Key decisions are preserved in `project_2/docs/adr/`.
+3. **Gate 3 (Contract Parity):** All UART serial packets and simulator arguments conform to OpenSpec specs.
+4. **Gate 4 (Standard Mermaid):** All diagrams use standard default themes without custom color overrides.
+5. **Gate 5 (Active Link Health):** Zero `file://` URIs inside markdown files.
+6. **Gate 6 (Security & Integrity):** No credentials or untrusted execution vectors.
+7. **Gate 7 (Master README):** Humanized operational documentation with verified 1-line commands.
