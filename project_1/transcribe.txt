@@ -1,0 +1,32 @@
+Okay, es nuestro proyecto de embarcados.
+Tenemos simulación que podemos ver pit
+podemos ver que te movimentación
+eh prendotores depende de inclinación tu
+mpu de acá tenemos también los motores.
+Acá tenemos eh los arduinos. Estamos
+haciendo un arduino de comunicación,
+pero radiofrecuencia. Entonces acá es
+todo arduino, está conectado y otro
+arduino es inalámbrico. Esto está
+desligado.
+Eh, acá tenemos también cuatro motores
+chipazo y tenemos la comunicación
+serial. Entonces lo que va a hacer es
+por ejemplo mecer hacia adelante y como
+pueden ver la simulación eso están
+haciendo dos motores que la idea de es
+que él eh fique movimentando un poquiño
+para que el dron estabilice y fica al
+mismo nivel y prenda dos motores. En
+estado acá se pone que si tengo esto
+para adelante estos dos motores ligan.
+Si mecho esto para atrás esos dos
+motores ligan. Si me hecho para
+izquierda, ligan estos dois y para
+dereita, ligan esos outros dois, que son
+las cuatro ascos de motor.
+Acá también hacemos la Entonces podemos
+ver que encenden de delante, detrás,
+izquierda, dependiendo inclinación y a
+derecha.
+Entonces, hizo el proyecto.

@@ -15,6 +15,7 @@
 | :--- | :--- | :--- |
 | 📄 **[system_purpose.md](system_purpose.md)** | **The "Why" & "What" (Product & Roadmap).** Defines the educational and engineering objectives, the 4 incremental implementation stages, safety boundaries, and actors. | Onboarding, stage scoping, and `/grill-me` requirement refinement. |
 | 📄 **[system_architecture.md](system_architecture.md)** | **The "How It Works" (Hardware & Math Architecture).** Maps the 5-layer Bottom-Up stack, Arduino Uno pinout, MPU-6050/6000 registers, Euler kinematics, complementary filter, PID equations, Appendix B globals, and prototype bug audit. | Writing firmware, verifying mathematical formulas, and debugging hardware/timing issues. |
+| 📁 **[adr/](adr/README.md)** | **Architectural Decision Records (ADRs).** Formal records documenting the context, alternatives, decisions, and trade-offs of critical system design choices (calibration, decimation, ZUPT, logging). | Architectural reviews, design audits, and Gate 2 compliance. |
 | 📄 **[CHANGELOG.md](CHANGELOG.md)** | **The "History" (Evolution Log).** Chronological record of all architectural decisions, OpenSpec proposals, and stage completions. | Auditing repository progress across sessions. |
 | 📁 **[../ref/DRONE_materialdeapoio/](../ref/DRONE_materialdeapoio/)** | **The "Reference Baseline" (Datasheets & Guide).** Contains the EESC-USP guide (`tutorial_programacao_drone_especializacao.pdf`), `example_01.ino` prototype, `YMFC_schematic.pdf`, and MPU-6000 datasheets. | Cross-checking original equations and hardware specifications. |
 
