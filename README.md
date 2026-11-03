@@ -127,11 +127,6 @@ The real-time MPU-6050 attitude tracking, live serial telemetry ingestion, and P
   <p><em>Click the image above to view the demonstration on YouTube: <a href="https://www.youtube.com/shorts/7p0rP1CsYMk">https://www.youtube.com/shorts/7p0rP1CsYMk</a></em></p>
 </div>
 
-<div align="center" style="margin-top: 16px;">
-  <img src="project_2/images/sim_3d_visualizer/3d_simulation.png" alt="Project 2 Real-Time 3D Simulation & Telemetry Visualizer" style="width: 85%; max-width: 800px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.35);">
-  <p><em>Figure: Real-time 3D flight simulation interface featuring Graphite UITheme, RViz IMU axes triad, live velocity telemetry, and 25 Hz serial synchronization drawer.</em></p>
-</div>
-
 ---
 
 ## 4. Repository Structure & Living Documentation
