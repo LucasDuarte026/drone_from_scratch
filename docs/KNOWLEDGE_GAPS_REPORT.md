@@ -29,11 +29,11 @@ This report summarizes these knowledge gaps and provides an actionable checklist
 
 ## 3. Multimedia Assets & Video Placeholders
 
-| Asset | Target Location | Description & Action Required | Priority |
+| Asset | Target Location | Description & Action Required | Status |
 | :--- | :--- | :--- | :---: |
-| **Project 2 Video Demonstration** | `project_2/README.md` and Root `README.md` | Provide YouTube URL or video link demonstrating the Project 2 real-time 3D simulation (`sim_3d.py`) and live MPU-6050 serial tracking. | High |
-| **Project 2 Simulation Screenshots** | `project_2/images/sim_3d_visualizer/` | Capture 3 to 4 high-resolution screenshots of `sim_3d.py`: (1) Default isometric attitude, (2) Pitch/Roll tilt with laser ground projection, (3) ZUPT active indicator, (4) Verbose HUD telemetry. | High |
-| **Project 2 Physical Hardware Photos** | `project_2/images/hardware/` | Photographs of the Arduino Uno + MPU-6050 prototype wiring and D12/D13 status LED indicators. | Medium |
+| **Project 2 Video Demonstration** | `project_2/README.md` and Root `README.md` | YouTube Shorts demonstration (`https://www.youtube.com/shorts/7p0rP1CsYMk`) showing real-time MPU-6050 attitude tracking and 3D simulation. | ✅ **Resolved** |
+| **Project 2 Simulation Screenshots** | `project_2/images/sim_3d_visualizer/` | Screenshot `3d_simulation.png` showing PyOpenGL visualizer with Graphite UITheme, RViz IMU triad, and telemetry drawer. | ✅ **Resolved** |
+| **Project 2 Physical Hardware Photos** | `project_2/images/hardware/` | Photographs of the Arduino Uno + MPU-6050 prototype wiring and D12/D13 status LED indicators. | Medium Priority |
 
 ---
 
@@ -50,8 +50,8 @@ This report summarizes these knowledge gaps and provides an actionable checklist
 
 ## 5. Action Checklist for Round 2
 
-- [ ] 1. Provide YouTube URL for Project 2 video demonstration.
-- [ ] 2. Supply 3-4 screenshots for `project_2/images/sim_3d_visualizer/`.
+- [x] 1. Provide YouTube URL for Project 2 video demonstration (Supplied: `https://www.youtube.com/shorts/7p0rP1CsYMk`).
+- [x] 2. Supply screenshot for `project_2/images/sim_3d_visualizer/` (Supplied: `3d_simulation.png`).
 - [ ] 3. Confirm HC-12 AT baud rate programming procedure.
 - [ ] 4. Confirm target BLDC motor/ESC specifications for Stage 3 flight controller.
 - [ ] 5. Confirm planned positioning sensor suite for Extended Kalman Filter (EKF) implementation.

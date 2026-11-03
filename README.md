@@ -15,6 +15,31 @@
 
 ## 1. System Overview & Evolutionary Architecture
 
+<div align="center" style="margin-bottom: 24px;">
+  <table style="width: 100%; max-width: 960px; border-collapse: separate; border-spacing: 12px; border: none;">
+    <tr>
+      <td width="50%" align="center" style="border: 1px solid #30363d; border-radius: 8px; padding: 12px; background-color: #0d1117; vertical-align: top;">
+        <a href="project_1/README.md">
+          <img src="project_1/images/platform.jpeg" alt="Project 1: Physical Quadcopter Bench" style="width: 100%; height: 230px; object-fit: cover; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
+        </a>
+        <br><br>
+        <strong><a href="project_1/README.md">Project 1: Physical Test Bench</a></strong>
+        <br>
+        <small style="color: #8b949e;">Dual ATmega328P, HC-12 433 MHz RF, MPU-6050 & 4x Stepper Motors with Active Tilt Compensation</small>
+      </td>
+      <td width="50%" align="center" style="border: 1px solid #30363d; border-radius: 8px; padding: 12px; background-color: #0d1117; vertical-align: top;">
+        <a href="project_2/README.md">
+          <img src="project_2/images/sim_3d_visualizer/3d_simulation.png" alt="Project 2: Real-Time 3D Simulation & Telemetry Visualizer" style="width: 100%; height: 230px; object-fit: cover; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
+        </a>
+        <br><br>
+        <strong><a href="project_2/README.md">Project 2: 3D Odometry & Firmware</a></strong>
+        <br>
+        <small style="color: #8b949e;">250 Hz Deterministic Loop, 25 Hz Decimated UART & PyOpenGL 3D Simulator with ZUPT</small>
+      </td>
+    </tr>
+  </table>
+</div>
+
 This repository hosts the autonomous quadcopter embedded flight control and inertial navigation systems developed for course SAA0356 at EESC-USP. The codebase reflects two complementary, phased engineering projects:
 
 ```mermaid
@@ -93,13 +118,18 @@ The physical test bench, dual-Arduino wireless RF link, and active stepper tilt 
 4. **3D Telemetry Synchronization:** The Pygame/PyOpenGL 3D visualizer mirrors bench attitude in real time.
 
 ### 3.2 Project 2: 3D Odometry & Inertial Simulation Video
+The real-time MPU-6050 attitude tracking, live serial telemetry ingestion, and PyOpenGL 3D simulation were recorded:
+
 <div align="center">
-  <div style="background: #18191c; padding: 24px; border-radius: 8px; border: 1px solid #333; margin: 16px 0;">
-    <p style="color: #888; font-family: monospace; margin: 0 0 12px 0;">[ Project 2 3D Odometry Simulation Video Placeholder ]</p>
-    <p style="color: #ccc; font-size: 0.95em; line-height: 1.5; margin: 0;">
-      A dedicated video recording demonstrating Project 2's PyOpenGL 3D flight simulator, real-time MPU-6050 serial tracking, ZUPT stationary deadband behavior, and verbose diagnostics will be added here in the next iteration.
-    </p>
-  </div>
+  <a href="https://www.youtube.com/shorts/7p0rP1CsYMk" target="_blank">
+    <img src="https://img.youtube.com/vi/7p0rP1CsYMk/maxresdefault.jpg" alt="Project 2 3D Odometry Simulation Video Demonstration" style="width: 80%; max-width: 720px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+  </a>
+  <p><em>Click the image above to view the demonstration on YouTube: <a href="https://www.youtube.com/shorts/7p0rP1CsYMk">https://www.youtube.com/shorts/7p0rP1CsYMk</a></em></p>
+</div>
+
+<div align="center" style="margin-top: 16px;">
+  <img src="project_2/images/sim_3d_visualizer/3d_simulation.png" alt="Project 2 Real-Time 3D Simulation & Telemetry Visualizer" style="width: 85%; max-width: 800px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.35);">
+  <p><em>Figure: Real-time 3D flight simulation interface featuring Graphite UITheme, RViz IMU axes triad, live velocity telemetry, and 25 Hz serial synchronization drawer.</em></p>
 </div>
 
 ---
@@ -127,7 +157,7 @@ projects/drone/
 │   └── openspec/                             # Project 1 Ephemeral OpenSpec Harness
 └── project_2/                                # Production Firmware & Odometry Research
     ├── README.md                             # Subsystem Technical Guide & Odometry Analysis
-    ├── VERSION                               # Semantic Version (0.5.0)
+    ├── VERSION                               # Semantic Version (0.6.0)
     ├── platformio.ini                        # PlatformIO multi-environment configuration
     ├── code/                                 # Embedded C/C++ firmware
     │   ├── include/drone_config.h            # Timing, pinout, and filter constants
@@ -146,7 +176,8 @@ projects/drone/
     │   ├── system_purpose.md                 # 4-stage incremental roadmap
     │   ├── CHANGELOG.md                      # Chronological version history
     │   └── adr/                              # Architectural Decision Records (ADR 1–4)
-    ├── images/sim_3d_visualizer/             # Simulator screenshot gallery (placeholders)
+    ├── images/sim_3d_visualizer/             # Simulator screenshot gallery
+    │   └── 3d_simulation.png                 # PyOpenGL 3D visualizer interface screenshot
     └── openspec/                             # Project 2 Ephemeral OpenSpec Harness
 ```
 

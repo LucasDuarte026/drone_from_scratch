@@ -15,6 +15,11 @@
 
 ## 1. System Overview & Bottom-Up SDD Architecture
 
+<div align="center" style="margin-bottom: 24px;">
+  <img src="images/sim_3d_visualizer/3d_simulation.png" alt="Project 2: Real-Time 3D Simulation & Telemetry Visualizer" style="width: 95%; max-width: 920px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);">
+  <p><em>Figure 1: Real-time 3D flight simulation and inertial odometry interface featuring Graphite UITheme, 4x MSAA, RViz IMU triad, and 25 Hz serial telemetry synchronization drawer.</em></p>
+</div>
+
 **Project 2** establishes a modular embedded flight controller firmware and inertial odometry research platform for the ATmega328P microcontroller. Developed under **Spec-Driven Development (SDD)** and **Test-Driven Development (TDD)**, the codebase enforces strict separation of concerns, deterministic $250\text{ Hz}$ execution timing, dual-rate serial telemetry decimation, and forensic mathematical testing.
 
 ```mermaid
@@ -258,15 +263,21 @@ The EKF continually estimates sensor bias states ($b_a, b_g$) and bounds the cov
 
 ## 5. Real-Time 3D Simulation & Telemetry Visualizer (`odometry/`)
 
-The Python 3D simulation environment provides visual validation of firmware telemetry:
+The Python 3D simulation environment provides visual validation of firmware telemetry, featuring the Graphite UITheme, 4x MSAA rendering, and live Zero-Velocity Update (ZUPT) monitoring:
 
 <div align="center">
-  <div style="background: #18191c; padding: 24px; border-radius: 8px; border: 1px solid #333; margin: 16px 0;">
-    <p style="color: #888; font-family: monospace; margin: 0 0 12px 0;">[ Project 2 3D Odometry Simulation Video Placeholder ]</p>
-    <p style="color: #ccc; font-size: 0.95em; line-height: 1.5; margin: 0;">
-      A dedicated high-definition demonstration video of the 3D Pygame/PyOpenGL simulator, real-time MPU-6050 attitude tracking, and live ZUPT odometry behavior will be linked here in the upcoming iteration.
-    </p>
-  </div>
+  <img src="images/sim_3d_visualizer/3d_simulation.png" alt="Project 2 Real-Time 3D Simulation & Telemetry Visualizer" style="width: 90%; max-width: 900px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); margin-bottom: 16px;">
+  <p><em>Figure 3: PyOpenGL 3D visualizer showing attitude tracking, RViz IMU triad, live velocity readouts, and 25 Hz telemetry synchronization drawer.</em></p>
+</div>
+
+### 5.1 Real-Time 3D Flight Simulation Video Demonstration
+The real-time MPU-6050 attitude tracking, live UART ingestion, and 3D flight simulation were recorded:
+
+<div align="center">
+  <a href="https://www.youtube.com/shorts/7p0rP1CsYMk" target="_blank">
+    <img src="https://img.youtube.com/vi/7p0rP1CsYMk/maxresdefault.jpg" alt="Project 2 3D Flight Simulation Video Demonstration" style="width: 80%; max-width: 720px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+  </a>
+  <p><em>Click the image above to view the demonstration on YouTube: <a href="https://www.youtube.com/shorts/7p0rP1CsYMk">https://www.youtube.com/shorts/7p0rP1CsYMk</a></em></p>
 </div>
 
 ### Interactive Controls
